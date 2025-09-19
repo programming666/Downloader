@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>900</width>
+    <height>600</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>多线程下载器</string>
+  </property>
+  <property name="windowIcon">
+   <iconset>
+    <normaloff>icon.ico</normaloff>icon.ico</iconset>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <item>
+     <widget class="QTableWidget" name="tableWidget"/>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>900</width>
+     <height>23</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>文件</string>
+    </property>
+    <addaction name="actionNewTask"/>
+    <addaction name="separator"/>
+    <addaction name="actionExit"/>
+   </widget>
+   <widget class="QMenu" name="menuTask">
+    <property name="title">
+     <string>任务</string>
+    </property>
+    <addaction name="actionStartAll"/>
+    <addaction name="actionPauseAll"/>
+    <addaction name="separator"/>
+    <addaction name="actionPauseSelected"/>
+    <addaction name="actionResumeSelected"/>
+    <addaction name="separator"/>
+    <addaction name="actionCancelSelected"/>
+    <addaction name="actionDeleteSelected"/>
+   </widget>
+   <widget class="QMenu" name="menuSettings">
+    <property name="title">
+     <string>设置</string>
+    </property>
+    <addaction name="actionSettings"/>
+   </widget>
+   <widget class="QMenu" name="menuLanguage">
+    <property name="title">
+     <string>语言</string>
+    </property>
+    <addaction name="actionChinese"/>
+    <addaction name="actionEnglish"/>
+   </widget>
+   <widget class="QMenu" name="menuHelp">
+    <property name="title">
+     <string>帮助</string>
+    </property>
+    <addaction name="actionAbout"/>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuTask"/>
+   <addaction name="menuSettings"/>
+   <addaction name="menuLanguage"/>
+   <addaction name="menuHelp"/>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QToolBar" name="toolBar">
+   <property name="windowTitle">
+    <string>toolBar</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionNewTask"/>
+   <addaction name="actionStartAll"/>
+   <addaction name="actionPauseAll"/>
+   <addaction name="actionPauseSelected"/>
+   <addaction name="actionResumeSelected"/>
+   <addaction name="actionCancelSelected"/>
+   <addaction name="actionDeleteSelected"/>
+   <addaction name="separator"/>
+   <addaction name="actionSettings"/>
+   <addaction name="actionAbout"/>
+  </widget>
+  <action name="actionNewTask">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/new.png</normaloff>:/icons/new.png</iconset>
+   </property>
+   <property name="text">
+    <string>新建任务</string>
+   </property>
+   <property name="toolTip">
+    <string>新建下载任务</string>
+   </property>
+  </action>
+  <action name="actionStartAll">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/start.png</normaloff>:/icons/start.png</iconset>
+   </property>
+   <property name="text">
+    <string>全部开始</string>
+   </property>
+   <property name="toolTip">
+    <string>开始所有下载任务</string>
+   </property>
+  </action>
+  <action name="actionPauseAll">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/pause.png</normaloff>:/icons/pause.png</iconset>
+   </property>
+   <property name="text">
+    <string>全部暂停</string>
+   </property>
+   <property name="toolTip">
+    <string>暂停所有下载任务</string>
+   </property>
+  </action>
+  <action name="actionCancelSelected">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/cancel.png</normaloff>:/icons/cancel.png</iconset>
+   </property>
+   <property name="text">
+    <string>取消选中</string>
+   </property>
+   <property name="toolTip">
+    <string>取消选中的下载任务</string>
+   </property>
+  </action>
+  <action name="actionDeleteSelected">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/delete.png</normaloff>:/icons/delete.png</iconset>
+   </property>
+   <property name="text">
+    <string>删除选中</string>
+   </property>
+   <property name="toolTip">
+    <string>删除选中的下载任务</string>
+   </property>
+  </action>
+  <action name="actionPauseSelected">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/pause.png</normaloff>:/icons/pause.png</iconset>
+   </property>
+   <property name="text">
+    <string>暂停选中</string>
+   </property>
+   <property name="toolTip">
+    <string>暂停选中的下载任务</string>
+   </property>
+  </action>
+  <action name="actionResumeSelected">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/start.png</normaloff>:/icons/start.png</iconset>
+   </property>
+   <property name="text">
+    <string>继续选中</string>
+   </property>
+   <property name="toolTip">
+    <string>继续选中的下载任务</string>
+   </property>
+  </action>
+  <action name="actionSettings">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/settings.png</normaloff>:/icons/settings.png</iconset>
+   </property>
+   <property name="text">
+    <string>设置</string>
+   </property>
+   <property name="toolTip">
+    <string>应用程序设置</string>
+   </property>
+  </action>
+  <action name="actionAbout">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/about.png</normaloff>:/icons/about.png</iconset>
+   </property>
+   <property name="text">
+    <string>关于</string>
+   </property>
+   <property name="toolTip">
+    <string>关于本程序</string>
+   </property>
+  </action>
+  <action name="actionExit">
+   <property name="text">
+    <string>退出</string>
+   </property>
+   <property name="toolTip">
+    <string>退出应用程序</string>
+   </property>
+  </action>
+  <action name="actionChinese">
+   <property name="text">
+    <string>中文</string>
+   </property>
+   <property name="toolTip">
+    <string>切换到中文界面</string>
+   </property>
+  </action>
+  <action name="actionEnglish">
+   <property name="text">
+    <string>English</string>
+   </property>
+   <property name="toolTip">
+    <string>Switch to English interface</string>
+   </property>
+  </action>
+ </widget>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>actionExit</sender>
+   <signal>triggered()</signal>
+   <receiver>MainWindow</receiver>
+   <slot>close()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>-1</x>
+     <y>-1</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>399</x>
+     <y>299</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+</ui>

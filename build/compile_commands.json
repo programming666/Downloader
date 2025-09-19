@@ -1,0 +1,80 @@
+[
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\Downloader_autogen\\mocs_compilation.cpp.obj -c D:\\QT6Project\\Downloader\\build\\Downloader_autogen\\mocs_compilation.cpp",
+  "file": "D:\\QT6Project\\Downloader\\build\\Downloader_autogen\\mocs_compilation.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\Downloader_autogen\\mocs_compilation.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\main.cpp.obj -c D:\\QT6Project\\Downloader\\main.cpp",
+  "file": "D:\\QT6Project\\Downloader\\main.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\main.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\mainwindow.cpp.obj -c D:\\QT6Project\\Downloader\\mainwindow.cpp",
+  "file": "D:\\QT6Project\\Downloader\\mainwindow.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\mainwindow.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\downloadmanager.cpp.obj -c D:\\QT6Project\\Downloader\\downloadmanager.cpp",
+  "file": "D:\\QT6Project\\Downloader\\downloadmanager.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\downloadmanager.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\downloadtask.cpp.obj -c D:\\QT6Project\\Downloader\\downloadtask.cpp",
+  "file": "D:\\QT6Project\\Downloader\\downloadtask.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\downloadtask.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\httpworker.cpp.obj -c D:\\QT6Project\\Downloader\\httpworker.cpp",
+  "file": "D:\\QT6Project\\Downloader\\httpworker.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\httpworker.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\historymanager.cpp.obj -c D:\\QT6Project\\Downloader\\historymanager.cpp",
+  "file": "D:\\QT6Project\\Downloader\\historymanager.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\historymanager.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\settingsmanager.cpp.obj -c D:\\QT6Project\\Downloader\\settingsmanager.cpp",
+  "file": "D:\\QT6Project\\Downloader\\settingsmanager.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\settingsmanager.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\systemtray.cpp.obj -c D:\\QT6Project\\Downloader\\systemtray.cpp",
+  "file": "D:\\QT6Project\\Downloader\\systemtray.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\systemtray.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\localserver.cpp.obj -c D:\\QT6Project\\Downloader\\localserver.cpp",
+  "file": "D:\\QT6Project\\Downloader\\localserver.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\localserver.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\newtaskdialog.cpp.obj -c D:\\QT6Project\\Downloader\\newtaskdialog.cpp",
+  "file": "D:\\QT6Project\\Downloader\\newtaskdialog.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\newtaskdialog.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\settingsdialog.cpp.obj -c D:\\QT6Project\\Downloader\\settingsdialog.cpp",
+  "file": "D:\\QT6Project\\Downloader\\settingsdialog.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\settingsdialog.cpp.obj"
+},
+{
+  "directory": "D:/QT6Project/Downloader/build",
+  "command": "D:\\Qt\\Tools\\mingw1310_64\\bin\\g++.exe -DMINGW_HAS_SECURE_API=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NEEDS_QMAIN -DQT_NETWORK_LIB -DQT_SQL_LIB -DQT_WIDGETS_LIB -DUNICODE -DWIN32 -DWIN64 -D_ENABLE_EXTENDED_ALIGNED_STORAGE -D_UNICODE -D_WIN64 -ID:/QT6Project/Downloader/build/Downloader_autogen/include -isystem D:/Qt/6.10.0/mingw_64/include/QtCore -isystem D:/Qt/6.10.0/mingw_64/include -isystem D:/Qt/6.10.0/mingw_64/mkspecs/win32-g++ -isystem D:/Qt/6.10.0/mingw_64/include/QtWidgets -isystem D:/Qt/6.10.0/mingw_64/include/QtGui -isystem D:/Qt/6.10.0/mingw_64/include/QtNetwork -isystem D:/Qt/6.10.0/mingw_64/include/QtSql -g -o CMakeFiles\\Downloader.dir\\Downloader_autogen\\EWIEGA46WW\\qrc_icon.cpp.obj -c D:\\QT6Project\\Downloader\\build\\Downloader_autogen\\EWIEGA46WW\\qrc_icon.cpp",
+  "file": "D:\\QT6Project\\Downloader\\build\\Downloader_autogen\\EWIEGA46WW\\qrc_icon.cpp",
+  "output": "CMakeFiles\\Downloader.dir\\Downloader_autogen\\EWIEGA46WW\\qrc_icon.cpp.obj"
+}
+]

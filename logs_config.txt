@@ -1,0 +1,3 @@
+log_path=D:/LOG/downloader.log
+log_level=INFO
+append=true

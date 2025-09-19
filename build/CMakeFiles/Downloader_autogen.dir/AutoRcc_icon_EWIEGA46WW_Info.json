@@ -1,0 +1,29 @@
+{
+	"BUILD_DIR" : "D:/QT6Project/Downloader/build/Downloader_autogen",
+	"CMAKE_BINARY_DIR" : "D:/QT6Project/Downloader/build",
+	"CMAKE_CURRENT_BINARY_DIR" : "D:/QT6Project/Downloader/build",
+	"CMAKE_CURRENT_SOURCE_DIR" : "D:/QT6Project/Downloader",
+	"CMAKE_SOURCE_DIR" : "D:/QT6Project/Downloader",
+	"CROSS_CONFIG" : false,
+	"GENERATOR" : "Ninja",
+	"INCLUDE_DIR" : "D:/QT6Project/Downloader/build/Downloader_autogen/include",
+	"INPUTS" : 
+	[
+		"D:/QT6Project/Downloader/icon.ico",
+		"D:/QT6Project/Downloader/styles/dark.qss",
+		"D:/QT6Project/Downloader/styles/light.qss",
+		"D:/QT6Project/Downloader/translations/en_US.qm",
+		"D:/QT6Project/Downloader/translations/zh_CN.qm"
+	],
+	"LOCK_FILE" : "D:/QT6Project/Downloader/build/CMakeFiles/Downloader_autogen.dir/AutoRcc_icon_EWIEGA46WW_Lock.lock",
+	"MULTI_CONFIG" : false,
+	"OPTIONS" : [ "--no-zstd", "-name", "icon" ],
+	"OUTPUT_CHECKSUM" : "EWIEGA46WW",
+	"OUTPUT_NAME" : "qrc_icon.cpp",
+	"RCC_EXECUTABLE" : "D:/Qt/6.10.0/mingw_64/bin/rcc.exe",
+	"RCC_LIST_OPTIONS" : [ "--list" ],
+	"SETTINGS_FILE" : "D:/QT6Project/Downloader/build/CMakeFiles/Downloader_autogen.dir/AutoRcc_icon_EWIEGA46WW_Used.txt",
+	"SOURCE" : "D:/QT6Project/Downloader/icon.qrc",
+	"USE_BETTER_GRAPH" : true,
+	"VERBOSITY" : 0
+}

@@ -1,0 +1,9 @@
+D:/QT6Project/Downloader/build/Desktop_Qt_6_10_0_MinGW_64_bit-release/CMakeFiles/Downloader.dir
+D:/QT6Project/Downloader/build/Desktop_Qt_6_10_0_MinGW_64_bit-release/CMakeFiles/edit_cache.dir
+D:/QT6Project/Downloader/build/Desktop_Qt_6_10_0_MinGW_64_bit-release/CMakeFiles/rebuild_cache.dir
+D:/QT6Project/Downloader/build/Desktop_Qt_6_10_0_MinGW_64_bit-release/CMakeFiles/list_install_components.dir
+D:/QT6Project/Downloader/build/Desktop_Qt_6_10_0_MinGW_64_bit-release/CMakeFiles/install.dir
+D:/QT6Project/Downloader/build/Desktop_Qt_6_10_0_MinGW_64_bit-release/CMakeFiles/install/local.dir
+D:/QT6Project/Downloader/build/Desktop_Qt_6_10_0_MinGW_64_bit-release/CMakeFiles/install/strip.dir
+D:/QT6Project/Downloader/build/Desktop_Qt_6_10_0_MinGW_64_bit-release/CMakeFiles/Downloader_autogen_timestamp_deps.dir
+D:/QT6Project/Downloader/build/Desktop_Qt_6_10_0_MinGW_64_bit-release/CMakeFiles/Downloader_autogen.dir
