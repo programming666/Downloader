@@ -1,4 +1,5 @@
 #include "systemtray.h"
+#include "logger.h"
 
 /**
  * @brief 系统托盘构造函数
@@ -55,10 +56,14 @@ SystemTray::SystemTray(QMainWindow* mainWindow, QObject *parent)
     m_trayIcon->setToolTip(tr("Downloader"));
 
     // 创建菜单
+    m_trayMenu = new QMenu();
     createActions();
 
     // 连接信号和槽
     connect(m_trayIcon, &QSystemTrayIcon::activated, this, &SystemTray::onIconActivated);
+    
+    // 设置托盘图标菜单
+    m_trayIcon->setContextMenu(m_trayMenu);
 }
 
 SystemTray::~SystemTray()
@@ -95,15 +100,20 @@ void SystemTray::createActions()
     LOGD("显示动作创建完成");
     
     LOGD("开始创建退出动作...");
-    m_exitAction = new QAction("退出", this);
+    m_quitAction = new QAction("退出", this);
     LOGD("退出动作创建完成");
     
     LOGD("开始连接动作信号...");
     connect(m_showAction, &QAction::triggered, this, &SystemTray::onShowMainWindow);
-    connect(m_exitAction, &QAction::triggered, this, &SystemTray::onExit);
+    connect(m_quitAction, &QAction::triggered, this, &SystemTray::onQuitApplication);
     LOGD("动作信号连接完成");
     
     LOGD("动作创建完成");
+    
+    // 将动作添加到菜单
+    m_trayMenu->addAction(m_showAction);
+    m_trayMenu->addSeparator();
+    m_trayMenu->addAction(m_quitAction);
 }
 
 void SystemTray::show()

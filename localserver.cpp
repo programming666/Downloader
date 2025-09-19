@@ -1,5 +1,7 @@
 #include "localserver.h"
+#include "logger.h"
 #include <QDebug>
+#include <QHostAddress>
 
 /**
  * @brief 本地服务器构造函数
@@ -18,16 +20,16 @@
  */
 LocalServer::LocalServer(QObject *parent)
     : QObject(parent)
-    , m_server(nullptr)
+    , m_tcpServer(nullptr)
 {
     LOGD("开始初始化LocalServer");
     
-    LOGD("开始创建QLocalServer...");
-    m_server = new QLocalServer(this);
-    LOGD("QLocalServer创建完成");
+    LOGD("开始创建QTcpServer...");
+    m_tcpServer = new QTcpServer(this);
+    LOGD("QTcpServer创建完成");
     
     LOGD("开始连接信号...");
-    connect(m_server, &QLocalServer::newConnection, this, &LocalServer::onNewConnection);
+    connect(m_tcpServer, &QTcpServer::newConnection, this, &LocalServer::onNewConnection);
     LOGD("信号连接完成");
     
     LOGD("LocalServer初始化完成");
@@ -65,22 +67,22 @@ bool LocalServer::startServer(quint16 port)
 {
     LOGD(QString("开始启动本地服务器 - 端口:%1").arg(port));
     
-    if (m_server->isListening()) {
+    if (m_tcpServer->isListening()) {
         LOGD("服务器已在监听状态，停止当前监听");
-        m_server->close();
+        m_tcpServer->close();
     }
     
     LOGD("开始监听...");
-    bool result = m_server->listen("downloader");
+    bool result = m_tcpServer->listen(QHostAddress::LocalHost, port);
     LOGD(QString("监听结果:%1").arg(result ? "成功" : "失败"));
     
     if (!result) {
-        LOGD(QString("监听失败 - 错误:%1").arg(m_server->errorString()));
-        emit error(QString("无法启动服务器: %1").arg(m_server->errorString()));
+        LOGD(QString("监听失败 - 错误:%1").arg(m_tcpServer->errorString()));
+        emit error(QString("无法启动服务器: %1").arg(m_tcpServer->errorString()));
         return false;
     }
     
-    LOGD(QString("本地服务器启动成功 - 服务器名称:downloader"));
+    LOGD(QString("本地服务器启动成功 - 监听端口:%1").arg(port));
     emit serverStarted();
     return true;
 }

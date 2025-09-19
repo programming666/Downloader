@@ -44,6 +44,17 @@ signals:
      */
     void newDownloadRequest(const QString& url, const QString& savePath);
 
+    /**
+     * @brief 当服务器启动失败时，发射此信号。
+     * @param errorString 错误描述。
+     */
+    void error(const QString& errorString);
+
+    /**
+     * @brief 当服务器成功启动时，发射此信号。
+     */
+    void serverStarted();
+
 private slots:
     /**
      * @brief 处理新的客户端连接。

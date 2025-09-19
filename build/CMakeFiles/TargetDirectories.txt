@@ -1,9 +1,0 @@
-D:/QT6Project/Downloader/build/CMakeFiles/Downloader.dir
-D:/QT6Project/Downloader/build/CMakeFiles/edit_cache.dir
-D:/QT6Project/Downloader/build/CMakeFiles/rebuild_cache.dir
-D:/QT6Project/Downloader/build/CMakeFiles/list_install_components.dir
-D:/QT6Project/Downloader/build/CMakeFiles/install.dir
-D:/QT6Project/Downloader/build/CMakeFiles/install/local.dir
-D:/QT6Project/Downloader/build/CMakeFiles/install/strip.dir
-D:/QT6Project/Downloader/build/CMakeFiles/Downloader_autogen_timestamp_deps.dir
-D:/QT6Project/Downloader/build/CMakeFiles/Downloader_autogen.dir
