@@ -34,3 +34,6 @@
 # build files and caches
 build/
 .cache/
+
+# cmake files
+CmakeLists.txt.user
