@@ -51,8 +51,9 @@ HttpWorker::~HttpWorker()
         delete m_file;
     }
     if (m_netManager) {
-        LOGD("删除网络管理器");
-        delete m_netManager; // 手动删除，因为不再有父对象
+        LOGD("标记网络管理器为延迟删除");
+        m_netManager->deleteLater();
+        m_netManager = nullptr;
     }
     
     LOGD("HttpWorker析构完成");
@@ -92,6 +93,7 @@ void HttpWorker::startDownload()
     
     if (m_isStopped) {
         LOGD("任务已停止，退出startDownload");
+        cleanup();
         return;
     }
     
@@ -100,20 +102,34 @@ void HttpWorker::startDownload()
     // 检查当前线程
     LOGD(QString("当前线程:%1 主线程:%2").arg(reinterpret_cast<quintptr>(QThread::currentThread()), 0, 16).arg(reinterpret_cast<quintptr>(qApp->thread()), 0, 16));
     
-    // 使用QTimer::singleShot在主线程中创建网络管理器
-    QTimer::singleShot(0, qApp, [this]() {
+    // 如果已经在主线程，直接创建网络管理器
+    if (QThread::currentThread() == qApp->thread()) {
+        LOGD("已经在主线程中，直接创建QNetworkAccessManager");
         if (m_isStopped) {
             LOGD("任务已停止，取消网络管理器创建");
+            cleanup();
             return;
         }
-        
-        LOGD("在主线程中创建QNetworkAccessManager");
         m_netManager = new QNetworkAccessManager();
         LOGD("QNetworkAccessManager创建完成，开始网络请求");
-        
-        // 继续执行下载逻辑
         continueDownload();
-    });
+    } else {
+        // 使用QTimer::singleShot在主线程中创建网络管理器
+        QTimer::singleShot(0, qApp, [this]() {
+            if (m_isStopped) {
+                LOGD("任务已停止，取消网络管理器创建");
+                cleanup();
+                return;
+            }
+            
+            LOGD("在主线程中创建QNetworkAccessManager");
+            m_netManager = new QNetworkAccessManager();
+            LOGD("QNetworkAccessManager创建完成，开始网络请求");
+            
+            // 继续执行下载逻辑
+            continueDownload();
+        });
+    }
 }
 
 void HttpWorker::continueDownload()
@@ -214,22 +230,67 @@ void HttpWorker::cleanup()
     LOGD("HttpWorker资源清理完成");
 }
 
+void HttpWorker::stopAsync()
+{
+    if (QThread::currentThread() == this->thread()) {
+        stop();
+    } else {
+        QMetaObject::invokeMethod(this, "stop", Qt::QueuedConnection);
+    }
+}
+
 void HttpWorker::stop()
 {
     LOGD("停止HttpWorker");
     m_isStopped = true;
-    if (m_reply) {
-        LOGD("中止网络请求");
-        m_reply->abort();
+    
+    // 立即关闭文件（线程安全方式）
+    if (m_file && m_file->isOpen()) {
+        LOGD("立即关闭文件");
+        m_file->close();
     }
-    LOGD("HttpWorker停止完成");
+
+    // 检查当前线程是否为主线程
+    if (QThread::currentThread() == qApp->thread()) {
+        LOGD("在主线程中执行停止操作");
+        if (m_reply) {
+            if (m_reply->isRunning()) {
+                LOGD("直接中止网络请求并清空缓冲区");
+                m_reply->abort();
+                m_reply->readAll(); // 清空接收缓冲区
+            }
+            m_reply->deleteLater();
+            m_reply = nullptr;
+        }
+    } else {
+        LOGD("在非主线程中执行停止操作，使用线程安全方式");
+        QMetaObject::invokeMethod(this, [this]() {
+            if (m_reply) {
+                if (m_reply->isRunning()) {
+                    LOGD("通过主线程中止网络请求并清空缓冲区");
+                    m_reply->abort();
+                    m_reply->readAll(); // 清空接收缓冲区
+                }
+                m_reply->deleteLater();
+                m_reply = nullptr;
+            }
+        }, Qt::QueuedConnection);
+    }
+    
+    LOGD("HttpWorker完全停止");
 }
 
 void HttpWorker::onReadyRead()
 {
-    if (m_isStopped || !m_file || !m_file->isOpen()) {
-        LOGD(QString("onReadyRead被调用但条件不满足 - 已停止:%1 文件对象:%2 文件打开:%3")
-             .arg(m_isStopped ? "是" : "否")
+    // 更严格的停止检查
+    if (m_isStopped) {
+        LOGD("收到数据但任务已停止，丢弃数据");
+        if (m_reply) m_reply->readAll(); // 清空缓冲区
+        return;
+    }
+    
+    if (!m_file || !m_file->isOpen()) {
+        LOGD(QString("文件不可用 - 文件对象:%1 文件打开:%2")
              .arg(m_file ? "存在" : "不存在")
              .arg((m_file && m_file->isOpen()) ? "是" : "否"));
         return;
@@ -292,6 +353,39 @@ void HttpWorker::onErrorOccurred(QNetworkReply::NetworkError code)
         emit finished();
         return;
     }
+    
+    // 检查是否需要重试（网络相关错误）
+    static int retryCount = 0;
+    const int maxRetries = 3;
+    
+    if (retryCount < maxRetries && 
+        (code == QNetworkReply::ConnectionRefusedError ||
+         code == QNetworkReply::RemoteHostClosedError ||
+         code == QNetworkReply::TimeoutError ||
+         code == QNetworkReply::TemporaryNetworkFailureError)) {
+        
+        retryCount++;
+        LOGD(QString("网络错误，尝试第%1次重试...").arg(retryCount));
+        
+        // 清理当前资源
+        if (m_reply) {
+            m_reply->deleteLater();
+            m_reply = nullptr;
+        }
+        
+        // 延迟重试
+        QTimer::singleShot(2000 * retryCount, this, [this]() {
+            if (!m_isStopped) {
+                LOGD("执行重试下载");
+                startDownload();
+            }
+        });
+        
+        return;
+    }
+    
+    // 重置重试计数器
+    retryCount = 0;
     
     LOGD("发射错误信号并清理资源");
     emit error(errorString);

@@ -97,19 +97,15 @@ void MainWindow::initUI()
     ui->tableWidget->setHorizontalHeaderLabels({
         tr("文件名"), tr("URL"), tr("进度"), tr("大小"), tr("速度"), tr("状态"), tr("操作")
     });
-    ui->tableWidget->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch); // 文件名列自适应
-    ui->tableWidget->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents); // URL列根据内容调整
-    ui->tableWidget->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Fixed); // 进度条固定
-    ui->tableWidget->setColumnWidth(2, 150);
-    ui->tableWidget->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents); // 大小列根据内容调整
-    ui->tableWidget->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents); // 速度列根据内容调整
-    ui->tableWidget->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents); // 状态列根据内容调整
-    ui->tableWidget->horizontalHeader()->setSectionResizeMode(6, QHeaderView::Fixed); // 操作列固定
-    ui->tableWidget->setColumnWidth(6, 100);
+    
+    // 智能响应式列宽配置
+    setupResponsiveTableColumns();
 
     ui->tableWidget->setSelectionBehavior(QAbstractItemView::SelectRows); // 整行选中
     ui->tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers); // 禁止编辑
     ui->tableWidget->setAlternatingRowColors(true); // 交替行颜色
+    ui->tableWidget->setSortingEnabled(false); // 禁用排序以保持任务顺序
+    ui->tableWidget->setCornerButtonEnabled(false); // 隐藏左上角按钮
 
     // 状态栏
     ui->statusbar->showMessage(tr("准备就绪"));
@@ -193,10 +189,15 @@ void MainWindow::addTaskToTable(DownloadTask* task)
 
     // 文件名
     LOGD("设置文件名列");
-    ui->tableWidget->setItem(row, 0, new QTableWidgetItem(task->fileName()));
+    QTableWidgetItem* fileNameItem = new QTableWidgetItem(task->fileName());
+    fileNameItem->setToolTip(task->fileName()); // 完整文件名提示
+    ui->tableWidget->setItem(row, 0, fileNameItem);
+    
     // URL
     LOGD("设置URL列");
-    ui->tableWidget->setItem(row, 1, new QTableWidgetItem(task->url()));
+    QTableWidgetItem* urlItem = new QTableWidgetItem(task->url());
+    urlItem->setToolTip(task->url()); // 完整URL提示
+    ui->tableWidget->setItem(row, 1, urlItem);
 
     // 进度条
     LOGD("创建进度条");
@@ -210,18 +211,24 @@ void MainWindow::addTaskToTable(DownloadTask* task)
     // 大小
     LOGD("创建大小标签");
     QLabel* sizeLabel = new QLabel(formatBytes(task->downloadedSize()) + "/" + formatBytes(task->totalSize()), this);
+    sizeLabel->setAlignment(Qt::AlignCenter);
+    sizeLabel->setToolTip(tr("已下载: %1\n总大小: %2").arg(formatBytes(task->downloadedSize())).arg(formatBytes(task->totalSize())));
     ui->tableWidget->setCellWidget(row, 3, sizeLabel);
     LOGD("大小标签创建完成");
 
     // 速度
     LOGD("创建速度标签");
     QLabel* speedLabel = new QLabel(formatSpeed(task->downloadSpeed()), this);
+    speedLabel->setAlignment(Qt::AlignCenter);
+    speedLabel->setToolTip(tr("当前下载速度: %1").arg(formatSpeed(task->downloadSpeed())));
     ui->tableWidget->setCellWidget(row, 4, speedLabel);
     LOGD("速度标签创建完成");
 
     // 状态
     LOGD("创建状态标签");
     QLabel* statusLabel = new QLabel(tr("等待中"), this);
+    statusLabel->setAlignment(Qt::AlignCenter);
+    statusLabel->setToolTip(tr("任务状态: %1").arg(tr("等待中")));
     ui->tableWidget->setCellWidget(row, 5, statusLabel);
     LOGD("状态标签创建完成");
 
@@ -262,13 +269,17 @@ void MainWindow::updateTaskInTable(DownloadTask* task)
             // 更新大小
             QLabel* sizeLabel = qobject_cast<QLabel*>(ui->tableWidget->cellWidget(row, 3));
             if (sizeLabel) {
-                sizeLabel->setText(formatBytes(task->downloadedSize()) + "/" + formatBytes(task->totalSize()));
+                QString sizeText = formatBytes(task->downloadedSize()) + "/" + formatBytes(task->totalSize());
+                sizeLabel->setText(sizeText);
+                sizeLabel->setToolTip(tr("已下载: %1\n总大小: %2").arg(formatBytes(task->downloadedSize())).arg(formatBytes(task->totalSize())));
             }
 
             // 更新速度
             QLabel* speedLabel = qobject_cast<QLabel*>(ui->tableWidget->cellWidget(row, 4));
             if (speedLabel) {
-                speedLabel->setText(formatSpeed(task->downloadSpeed()));
+                QString speedText = formatSpeed(task->downloadSpeed());
+                speedLabel->setText(speedText);
+                speedLabel->setToolTip(tr("当前下载速度: %1").arg(speedText));
             }
 
             // 更新状态
@@ -284,6 +295,7 @@ void MainWindow::updateTaskInTable(DownloadTask* task)
                 case DownloadTaskStatus::Failed: statusText = tr("失败"); break;
                 }
                 statusLabel->setText(statusText);
+                statusLabel->setToolTip(tr("任务状态: %1").arg(statusText));
             }
             return;
         }
@@ -529,6 +541,8 @@ void MainWindow::on_actionDeleteSelected_triggered()
     }
 }
 
+#include <QProgressDialog>
+
 void MainWindow::on_actionPauseSelected_triggered()
 {
     QList<QTableWidgetItem*> selectedItems = ui->tableWidget->selectedItems();
@@ -543,15 +557,57 @@ void MainWindow::on_actionPauseSelected_triggered()
         selectedRows.insert(item->row());
     }
 
+    // 收集需要暂停的任务
+    QList<DownloadTask*> tasksToStop;
     for (int row : selectedRows) {
         QTableWidgetItem* item = ui->tableWidget->item(row, 0);
         if (item) {
             DownloadTask* task = item->data(Qt::UserRole).value<DownloadTask*>();
             if (task && task->status() == DownloadTaskStatus::Downloading) {
-                task->pause();
+                tasksToStop.append(task);
             }
         }
     }
+
+    if (tasksToStop.isEmpty()) {
+        QMessageBox::information(this, tr("提示"), tr("没有可暂停的任务。"));
+        return;
+    }
+
+    // 创建进度对话框
+    m_pauseProgress = new QProgressDialog(tr("正在暂停选中的任务..."), 
+                                        tr("取消"), 
+                                        0, 
+                                        tasksToStop.size(), 
+                                        this);
+    m_pauseProgress->setWindowModality(Qt::WindowModal);
+    m_pauseProgress->setAttribute(Qt::WA_DeleteOnClose);
+    m_pauseProgress->show();
+    
+    // 使用QtConcurrent实现并行暂停
+    auto pauseOperation = [](DownloadTask* task) {
+        if (task) task->pause();
+    };
+    
+    // 创建并配置FutureWatcher
+    QFutureWatcher<void>* watcher = new QFutureWatcher<void>(this);
+    connect(watcher, &QFutureWatcher<void>::progressRangeChanged,
+            m_pauseProgress, &QProgressDialog::setRange);
+    connect(watcher, &QFutureWatcher<void>::progressValueChanged,
+            m_pauseProgress, &QProgressDialog::setValue);
+    connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher]() {
+        if (m_pauseProgress) m_pauseProgress->accept();
+        watcher->deleteLater();
+    });
+    
+    // 启动并行任务
+    QFuture<void> future = QtConcurrent::map(tasksToStop, pauseOperation);
+    watcher->setFuture(future);
+    
+    // 连接取消信号
+    connect(m_pauseProgress, &QProgressDialog::canceled, this, [watcher]() {
+        watcher->cancel();
+    });
 }
 
 void MainWindow::on_actionResumeSelected_triggered()
@@ -746,6 +802,39 @@ void MainWindow::closeEvent(QCloseEvent *event)
     }
 }
 
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    
+    // 窗口大小改变时，确保表格列宽合理分配
+    if (ui->tableWidget && ui->tableWidget->columnCount() > 0) {
+        int totalWidth = ui->tableWidget->viewport()->width();
+        
+        // 计算固定列的总宽度
+        int fixedWidth = ui->tableWidget->columnWidth(2) + ui->tableWidget->columnWidth(6); // 进度条 + 操作列
+        int contentWidth = 0;
+        
+        // 计算内容自适应列的宽度
+        for (int i = 3; i <= 5; ++i) {
+            contentWidth += ui->tableWidget->columnWidth(i);
+        }
+        
+        // 剩余宽度分配给文件名和URL列
+        int remainingWidth = totalWidth - fixedWidth - contentWidth - 20; // 预留边距
+        if (remainingWidth > 0) {
+            // 文件名列占30%，URL列占70%
+            int fileNameWidth = qMax(120, static_cast<int>(remainingWidth * 0.3));
+            int urlWidth = qMax(200, remainingWidth - fileNameWidth);
+            
+            // 限制最大宽度
+            fileNameWidth = qMin(fileNameWidth, 300);
+            urlWidth = qMin(urlWidth, 500);
+            
+            ui->tableWidget->setColumnWidth(0, fileNameWidth);
+        }
+    }
+}
+
 void MainWindow::on_actionChinese_triggered()
 {
     switchLanguage("zh_CN");
@@ -797,6 +886,11 @@ void MainWindow::switchLanguage(const QString& language)
     // 重新翻译UI
     ui->retranslateUi(this);
     
+    // 重新设置表头标签
+    ui->tableWidget->setHorizontalHeaderLabels({
+        tr("文件名"), tr("URL"), tr("进度"), tr("大小"), tr("速度"), tr("状态"), tr("操作")
+    });
+    
     // 更新语言菜单状态
     updateLanguageMenu();
     
@@ -808,6 +902,14 @@ void MainWindow::switchLanguage(const QString& language)
     }
 }
 
+/**
+ * @brief 更新语言菜单状态
+ * 
+ * 根据当前界面语言设置语言菜单项的选中状态：
+ * 1. 通过检查窗口标题判断当前语言(中文或英文)
+ * 2. 设置对应语言菜单项的checked状态
+ * 3. 确保每次语言切换后菜单状态同步更新
+ */
 void MainWindow::updateLanguageMenu()
 {
     // 根据当前语言更新菜单项的选中状态
@@ -828,6 +930,17 @@ void MainWindow::updateLanguageMenu()
     }
 }
 
+/**
+ * @brief UI更新定时器超时处理
+ * 
+ * 每200毫秒触发一次，用于批量更新任务状态：
+ * 1. 遍历m_tasksToUpdate集合中的所有任务
+ * 2. 调用updateTaskInTable更新每个任务的UI状态
+ * 3. 在状态栏显示最后一个活动任务的信息
+ * 4. 清空任务集合准备下一轮更新
+ * 
+ * 这种批量更新机制可以显著减少频繁UI更新带来的性能开销
+ */
 void MainWindow::onUiUpdateTimerTimeout()
 {
     if (m_tasksToUpdate.isEmpty()) {
@@ -856,4 +969,107 @@ void MainWindow::onUiUpdateTimerTimeout()
     }
 
     m_tasksToUpdate.clear();
+}
+
+/**
+ * @brief 配置响应式表格列宽
+ * 
+ * 根据内容重要性和显示需求动态调整表格列宽：
+ * 1. 文件名列：固定宽度150px，可手动调整(120-300px)
+ * 2. URL列：自动拉伸填充剩余空间，最小200px
+ * 3. 进度列：固定宽度120px
+ * 4. 大小/速度/状态列：根据内容自适应宽度(80-120px)
+ * 5. 操作列：固定宽度80px
+ * 
+ * 同时设置表格基本属性：
+ * - 启用自动换行和文本省略
+ * - 设置合理的行高和网格样式
+ * - 限制列宽在合理范围内
+ */
+void MainWindow::setupTableBasicProperties()
+{
+    QHeaderView* header = ui->tableWidget->horizontalHeader();
+    
+    // 设置表格基本属性
+    ui->tableWidget->setWordWrap(true);
+    ui->tableWidget->setTextElideMode(Qt::ElideMiddle);
+    header->setStretchLastSection(false);
+    
+    // 优化表格外观
+    ui->tableWidget->setGridStyle(Qt::SolidLine);
+    ui->tableWidget->setShowGrid(true);
+    header->setHighlightSections(false);
+    header->setSectionsMovable(false);
+    
+    // 设置行高
+    ui->tableWidget->verticalHeader()->setDefaultSectionSize(36);
+    ui->tableWidget->verticalHeader()->setMinimumSectionSize(32);
+    ui->tableWidget->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    
+    // 设置选择行为和焦点策略
+    ui->tableWidget->setFocusPolicy(Qt::StrongFocus);
+    ui->tableWidget->setMouseTracking(true);
+}
+
+void MainWindow::configureColumnWidths()
+{
+    QHeaderView* header = ui->tableWidget->horizontalHeader();
+    const int minWidths[] = {120, 200, 120, 80, 80, 80, 80};
+    const int maxWidths[] = {300, 400, 150, 120, 120, 100, 100};
+    
+    // 固定宽度列
+    header->setSectionResizeMode(2, QHeaderView::Fixed);
+    ui->tableWidget->setColumnWidth(2, 120);
+    
+    header->setSectionResizeMode(6, QHeaderView::Fixed);
+    ui->tableWidget->setColumnWidth(6, 80);
+    
+    // 自适应内容列
+    header->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    header->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    header->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    
+    // 设置最小宽度
+    for (int i = 3; i <= 5; ++i) {
+        header->setMinimumSectionSize(minWidths[i]);
+        if (ui->tableWidget->columnWidth(i) < minWidths[i]) {
+            ui->tableWidget->setColumnWidth(i, minWidths[i]);
+        }
+    }
+    
+    // 文件名列
+    header->setSectionResizeMode(0, QHeaderView::Interactive);
+    ui->tableWidget->setColumnWidth(0, 150);
+    header->setMinimumSectionSize(minWidths[0]);
+    
+    // URL列
+    header->setSectionResizeMode(1, QHeaderView::Stretch);
+    if (ui->tableWidget->columnWidth(1) < minWidths[1]) {
+        ui->tableWidget->setColumnWidth(1, minWidths[1]);
+    }
+}
+
+void MainWindow::setupHeaderBehavior()
+{
+    connect(ui->tableWidget->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int logicalIndex, int oldSize, int newSize) {
+        Q_UNUSED(oldSize)
+        
+        const int minWidths[] = {120, 200, 120, 80, 80, 80, 80};
+        const int maxWidths[] = {300, 400, 150, 120, 120, 100, 100};
+        
+        if (logicalIndex < 7) {
+            if (newSize < minWidths[logicalIndex]) {
+                ui->tableWidget->setColumnWidth(logicalIndex, minWidths[logicalIndex]);
+            } else if (newSize > maxWidths[logicalIndex]) {
+                ui->tableWidget->setColumnWidth(logicalIndex, maxWidths[logicalIndex]);
+            }
+        }
+    });
+}
+
+void MainWindow::setupResponsiveTableColumns()
+{
+    setupTableBasicProperties();
+    configureColumnWidths();
+    setupHeaderBehavior();
 }
