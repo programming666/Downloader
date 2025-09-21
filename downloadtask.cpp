@@ -7,6 +7,7 @@
 #include <QCoreApplication>
 #include <QThreadPool>
 #include <QMetaObject>
+#include <QPointer>
 #include "historymanager.h"
 
 /**
@@ -127,15 +128,22 @@ void DownloadTask::start()
         // 使用异步调用避免阻塞主线程
         locker.unlock();
         
+        // 使用QPointer安全包装this指针
+        QPointer<DownloadTask> safeThis(this);
+        
         // 异步发射状态变更信号
-        QTimer::singleShot(0, this, [this]() {
-            LOGD("异步发射statusChanged信号");
-            emit statusChanged(DownloadTaskStatus::Downloading);
+        QTimer::singleShot(0, this, [safeThis]() {
+            if (safeThis) {
+                LOGD("异步发射statusChanged信号");
+                emit safeThis->statusChanged(DownloadTaskStatus::Downloading);
+            }
         });
         LOGD("开始异步调用initializeDownload()");
-        QTimer::singleShot(0, this, [this]() {
-            LOGD("异步执行initializeDownload()");
-            initializeDownload();
+        QTimer::singleShot(0, this, [safeThis]() {
+            if (safeThis) {
+                LOGD("异步执行initializeDownload()");
+                safeThis->initializeDownload();
+            }
         });
     } else if (m_status == DownloadTaskStatus::Paused) {
         LOGD("任务状态为Paused，调用resume()");
@@ -286,9 +294,12 @@ void DownloadTask::setStatus(DownloadTaskStatus newStatus)
     // 在互斥锁外异步发射信号，避免潜在的死锁
     if (shouldEmitSignal) {
         LOGD("准备异步发射statusChanged信号");
-        QTimer::singleShot(0, this, [this, statusToEmit]() {
-            LOGD("异步发射statusChanged信号");
-            emit statusChanged(statusToEmit);
+        QPointer<DownloadTask> safeThis(this);
+        QTimer::singleShot(0, this, [safeThis, statusToEmit]() {
+            if (safeThis) {
+                LOGD("异步发射statusChanged信号");
+                emit safeThis->statusChanged(statusToEmit);
+            }
         });
         LOGD("statusChanged信号已排队发射");
     }
@@ -310,6 +321,17 @@ void DownloadTask::initializeDownload()
         LOGD(QString("目录不存在，尝试创建目录:%1").arg(dir.path()));
         if (!dir.mkpath(".")) {
             LOGD(QString("无法创建下载目录:%1").arg(dir.path()));
+            
+            // 清理已创建的网络资源
+            if (m_headReply) {
+                m_headReply->deleteLater();
+                m_headReply = nullptr;
+            }
+            if (m_headManager) {
+                m_headManager->deleteLater();
+                m_headManager = nullptr;
+            }
+            
             setStatus(DownloadTaskStatus::Failed);
             emit error(tr("无法创建下载目录: %1").arg(dir.path()));
             saveToHistory("Failed");
@@ -321,9 +343,12 @@ void DownloadTask::initializeDownload()
         LOGD("目录已存在");
     }
 
-    QMutexLocker locker(&m_mutex); // 保护成员变量
+    // 文件系统操作不需要锁保护
     LOGD("创建HEAD请求的网络管理器");
-    m_headManager = new QNetworkAccessManager(this); // 设置父对象保证在主线程
+    {
+        QMutexLocker locker(&m_mutex); // 仅在创建网络管理器时加锁
+        m_headManager = new QNetworkAccessManager(this); // 设置父对象保证在主线程
+    }
 
     QNetworkRequest request(m_url);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -345,10 +370,14 @@ void DownloadTask::initializeDownload()
     LOGD("HEAD请求信号连接完成");
 
     // 超时保护
-    QTimer::singleShot(20000, this, [this]() {
-        if (m_headReply && !m_headReply->isFinished()) {
+    QPointer<QNetworkReply> safeHeadReply(m_headReply);
+    QPointer<DownloadTask> safeThis(this);
+    QTimer::singleShot(20000, this, [safeThis, safeHeadReply]() {
+        if (safeThis && safeHeadReply && !safeHeadReply->isFinished()) {
             LOGD("HEAD请求超时，强制中止");
-            m_headReply->abort();
+            safeHeadReply->abort();
+            // 标记超时状态避免后续处理
+            safeThis->m_headRequestTimedOut = true;
         }
     });
 
@@ -359,9 +388,23 @@ void DownloadTask::onHeadRequestFinished()
 {
     LOGD("HEAD请求完成，检查响应...");
     
+    // 检查请求是否已超时
+    if (m_headRequestTimedOut) {
+        LOGD("HEAD请求已超时，忽略此回调");
+        return;
+    }
+    
     if (m_headReply->error() != QNetworkReply::NoError) {
-        LOGD(QString("HEAD请求失败:%1").arg(m_headReply->errorString()));
-        emit error(tr("HEAD请求失败: %1").arg(m_headReply->errorString()));
+        QString errorString = m_headReply->errorString();
+        LOGD(QString("HEAD请求失败:%1").arg(errorString));
+        
+        // 清理网络资源
+        m_headReply->deleteLater();
+        m_headManager->deleteLater();
+        m_headReply = nullptr;
+        m_headManager = nullptr;
+        
+        emit error(tr("HEAD请求失败: %1").arg(errorString));
         setStatus(DownloadTaskStatus::Failed);
         saveToHistory("Failed");
         emit finished();
@@ -402,11 +445,14 @@ void DownloadTask::onHeadRequestFinished()
     LOGD("开始创建HttpWorkers...");
     
     // 使用QTimer::singleShot异步创建workers，避免阻塞主线程
-    QTimer::singleShot(0, this, [this]() {
-        LOGD("异步创建HttpWorkers...");
-        createHttpWorkers();
-        m_speedCalculationTimer.start();
-        LOGD("HttpWorkers创建完成，速度计算定时器已启动");
+    QPointer<DownloadTask> safeThis(this);
+    QTimer::singleShot(0, this, [safeThis]() {
+        if (safeThis) {
+            LOGD("异步创建HttpWorkers...");
+            safeThis->createHttpWorkers();
+            safeThis->m_speedCalculationTimer.start();
+            LOGD("HttpWorkers创建完成，速度计算定时器已启动");
+        }
     });
     
     LOGD("HEAD请求处理完成");
@@ -415,6 +461,13 @@ void DownloadTask::onHeadRequestFinished()
 void DownloadTask::onHeadRequestError(QNetworkReply::NetworkError code)
 {
     Q_UNUSED(code);
+    
+    // 检查请求是否已超时
+    if (m_headRequestTimedOut) {
+        LOGD("HEAD请求已超时，忽略此错误回调");
+        return;
+    }
+    
     QString errorString;
     
     {
@@ -427,6 +480,17 @@ void DownloadTask::onHeadRequestError(QNetworkReply::NetworkError code)
     }
     
     LOGD(QString("HEAD请求错误，错误码:%1 错误信息:%2").arg(code).arg(errorString));
+    
+    // 清理网络资源
+    if (m_headReply) {
+        m_headReply->deleteLater();
+        m_headReply = nullptr;
+    }
+    if (m_headManager) {
+        m_headManager->deleteLater();
+        m_headManager = nullptr;
+    }
+    
     emit error(tr("HEAD请求错误: %1").arg(errorString));
     setStatus(DownloadTaskStatus::Failed);
     saveToHistory("Failed");

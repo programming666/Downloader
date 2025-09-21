@@ -240,6 +240,7 @@ private:
     int m_finishedWorkers;              ///< 已完成的HttpWorker数量。
     QTimer m_speedCalculationTimer;     ///< 用于计算下载速度的定时器。
     mutable QMutex m_mutex;                     ///< 用于保护共享数据的互斥锁。
+    bool m_headRequestTimedOut{false};  ///< 标记HEAD请求是否已超时。
 };
 
 #endif // DOWNLOADTASK_H
