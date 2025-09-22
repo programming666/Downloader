@@ -215,6 +215,59 @@ private:
     void deleteTempFiles();
 
     /**
+     * @brief 处理HEAD请求错误。
+     * @param errorString 错误信息。
+     */
+    void handleHeadRequestError(const QString& errorString);
+
+    /**
+     * @brief 处理HEAD响应。
+     */
+    void processHeadResponse();
+
+    /**
+     * @brief 准备最终文件。
+     * @param finalFile 最终文件对象。
+     * @return 准备成功返回true，否则返回false。
+     */
+    bool prepareFinalFile(QFile& finalFile);
+
+    /**
+     * @brief 合并单个临时文件。
+     * @param tempFilePath 临时文件路径。
+     * @param finalFile 最终文件对象。
+     * @param totalBytesWritten 累计写入字节数。
+     * @return 合并成功返回true，否则返回false。
+     */
+    bool mergeTempFile(const QString& tempFilePath, QFile& finalFile, qint64& totalBytesWritten);
+
+    /**
+     * @brief 验证最终文件。
+     * @param totalBytesWritten 总写入字节数。
+     * @param expectedSize 期望文件大小。
+     * @return 验证成功返回true，否则返回false。
+     */
+    bool validateFinalFile(qint64 totalBytesWritten, qint64 expectedSize);
+
+    /**
+     * @brief 获取线程数。
+     * @return 线程数。
+     */
+    int getThreadCount() const;
+
+    /**
+     * @brief 获取文件总大小。
+     * @return 文件总大小。
+     */
+    qint64 getTotalSize() const;
+
+    /**
+     * @brief 更新已下载大小。
+     * @param size 新的已下载大小。
+     */
+    void updateDownloadedSize(qint64 size);
+
+    /**
      * @brief 将任务记录保存到历史管理器。
      * @param status 任务的最终状态。
      */
@@ -239,7 +292,9 @@ private:
     QList<HttpWorker*> m_workers;       ///< HttpWorker列表。
     int m_finishedWorkers;              ///< 已完成的HttpWorker数量。
     QTimer m_speedCalculationTimer;     ///< 用于计算下载速度的定时器。
-    mutable QMutex m_mutex;                     ///< 用于保护共享数据的互斥锁。
+    mutable QMutex m_mutex;                     ///< 用于保护worker列表等数据的互斥锁
+    mutable QMutex m_statusMutex;               ///< 专门保护状态变量的互斥锁
+    mutable QMutex m_historyMutex;              ///< 专门保护历史记录操作的互斥锁
     bool m_headRequestTimedOut{false};  ///< 标记HEAD请求是否已超时。
 };
 

@@ -169,17 +169,51 @@ void DownloadTask::start()
 void DownloadTask::pause()
 {
     LOGD("开始暂停任务");
-    QMutexLocker locker(&m_mutex); // 保护m_status和m_workers
-    if (m_status == DownloadTaskStatus::Downloading) {
-        LOGD("任务正在下载中，执行暂停操作");
-        setStatus(DownloadTaskStatus::Paused);
-        m_speedCalculationTimer.stop();
-        for (HttpWorker* worker : m_workers) {
-            worker->stop();
+    QList<HttpWorker*> workersToStop;
+    bool shouldStop = false;
+    
+    // 先获取worker锁
+    {
+        QMutexLocker workerLocker(&m_mutex);
+        if (m_status == DownloadTaskStatus::Downloading) {
+            LOGD("任务正在下载中，准备暂停");
+            workersToStop = m_workers;
+            shouldStop = true;
+            m_speedCalculationTimer.stop();
+            LOGD("已复制worker列表并停止定时器");
         }
-        LOGD(QString("任务暂停完成 - URL:%1").arg(m_url.toString()));
+    }
+    
+    // 在worker锁外处理状态变更和停止操作
+    if (shouldStop) {
+        setStatus(DownloadTaskStatus::Paused); // 内部使用statusMutex
+        LOGD("任务状态设置为Paused");
+        
+        // 异步停止workers
+        for (HttpWorker* worker : workersToStop) {
+            if (worker) {
+                LOGD("异步停止worker");
+                worker->stopAsync();
+            }
+        }
+        LOGD(QString("任务暂停完成 - URL:%1").arg(url()));
     } else {
-        LOGD(QString("任务不在下载状态，无法暂停，当前状态:%1").arg(static_cast<int>(m_status)));
+        LOGD(QString("任务不在下载状态，无法暂停"));
+    }
+    LOGD("暂停操作完成，开始停止workers");
+    // 在互斥锁外直接停止workers，避免事件循环依赖
+    if (shouldStop) {
+        LOGD("开始停止workers");
+        
+        // 使用异步停止避免在主线程中阻塞
+        for (HttpWorker* worker : workersToStop) {
+            if (worker) {
+                LOGD("异步停止worker");
+                worker->stopAsync(); // 使用异步停止方法
+            }
+        }
+        
+        LOGD(QString("任务暂停完成 - URL:%1").arg(url()));
     }
 }
 
@@ -196,19 +230,32 @@ void DownloadTask::pause()
 void DownloadTask::resume()
 {
     LOGD("开始恢复任务");
-    QMutexLocker locker(&m_mutex); // 保护m_status和m_workers
-    if (m_status == DownloadTaskStatus::Paused) {
-        LOGD("任务已暂停，执行恢复操作");
-        setStatus(DownloadTaskStatus::Downloading);
+    QList<HttpWorker*> workersToResume;
+    bool shouldResume = false;
+    
+    // 1. 获取worker列表
+    {
+        QMutexLocker workerLocker(&m_mutex);
+        if (m_status == DownloadTaskStatus::Paused) {
+            LOGD("任务已暂停，准备恢复");
+            workersToResume = m_workers;
+            shouldResume = true;
+        }
+    }
+    
+    // 2. 在锁外处理状态和worker提交
+    if (shouldResume) {
+        setStatus(DownloadTaskStatus::Downloading); // 使用statusMutex
         m_speedCalculationTimer.start();
-        // 重新提交所有worker到线程池
-        LOGD(QString("重新提交%1个worker到线程池").arg(m_workers.size()));
-        for (HttpWorker* worker : m_workers) {
+        
+        LOGD(QString("重新提交%1个worker到线程池").arg(workersToResume.size()));
+        for (HttpWorker* worker : workersToResume) {
             QThreadPool::globalInstance()->start(worker);
         }
+        
         LOGD(QString("任务恢复完成 - URL:%1").arg(m_url.toString()));
     } else {
-        LOGD(QString("任务不在暂停状态，无法恢复，当前状态:%1").arg(static_cast<int>(m_status)));
+        LOGD(QString("任务不在暂停状态，无法恢复"));
     }
 }
 
@@ -228,34 +275,47 @@ void DownloadTask::resume()
 void DownloadTask::cancel(bool deleteTempFiles)
 {
     LOGD(QString("开始取消任务，删除临时文件:%1").arg(deleteTempFiles));
-    QMutexLocker locker(&m_mutex); // 保护m_status和m_workers
-    if (m_status == DownloadTaskStatus::Completed || m_status == DownloadTaskStatus::Cancelled || m_status == DownloadTaskStatus::Failed) {
-        LOGD(QString("任务已完成或已取消，无法再次取消，当前状态:%1").arg(static_cast<int>(m_status)));
-        return; // 已经完成或已取消的任务不能再次取消
-    }
-
-    setStatus(DownloadTaskStatus::Cancelled);
-    m_speedCalculationTimer.stop();
-    m_finishTime = QDateTime::currentDateTime();
-    LOGD(QString("任务状态设置为Cancelled，结束时间:%1").arg(m_finishTime.toString()));
-
-    LOGD(QString("停止%1个worker").arg(m_workers.size()));
-    for (HttpWorker* worker : m_workers) {
-        worker->stop();
-    }
-
-    if (deleteTempFiles) {
-        LOGD("删除临时文件");
-        this->deleteTempFiles(); // 明确调用成员函数
+    QList<HttpWorker*> workersToStop;
+    bool shouldCancel = false;
+    
+    // 1. 检查状态并获取worker列表
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_status != DownloadTaskStatus::Completed && 
+            m_status != DownloadTaskStatus::Cancelled && 
+            m_status != DownloadTaskStatus::Failed) {
+            workersToStop = m_workers;
+            shouldCancel = true;
+            m_speedCalculationTimer.stop();
+            m_finishTime = QDateTime::currentDateTime();
+        }
     }
     
-    LOGD("保存取消记录到历史");
-    saveToHistory("Cancelled");
-    
-    LOGD("发射finished信号");
-    emit finished(); // 通知管理器任务已完成（取消也是一种完成状态）
-    
-    LOGD(QString("任务取消完成 - URL:%1").arg(m_url.toString()));
+    // 2. 在锁外执行取消操作
+    if (shouldCancel) {
+        // 停止所有worker
+        LOGD(QString("停止%1个worker").arg(workersToStop.size()));
+        for (HttpWorker* worker : workersToStop) {
+            worker->stop();
+        }
+        
+        // 状态变更
+        setStatus(DownloadTaskStatus::Cancelled);
+        LOGD(QString("任务状态设置为Cancelled，结束时间:%1").arg(m_finishTime.toString()));
+        
+        // 耗时操作放在最后
+        if (deleteTempFiles) {
+            LOGD("删除临时文件");
+            this->deleteTempFiles();
+        }
+        
+        // 记录历史
+        saveToHistory("Cancelled");
+        emit finished();
+        LOGD(QString("任务取消完成 - URL:%1").arg(m_url.toString()));
+    } else {
+        LOGD("任务已完成或已取消，无需操作");
+    }
 }
 
 int DownloadTask::progressPercentage() const
@@ -282,7 +342,7 @@ void DownloadTask::setStatus(DownloadTaskStatus newStatus)
     DownloadTaskStatus statusToEmit;
     
     {
-        QMutexLocker locker(&m_mutex); // 保护m_status
+        QMutexLocker locker(&m_statusMutex); // 使用专门的状态锁
         if (m_status != newStatus) {
             LOGD(QString("任务状态变更：%1 -> %2").arg(static_cast<int>(m_status)).arg(static_cast<int>(newStatus)));
             m_status = newStatus;
@@ -384,57 +444,60 @@ void DownloadTask::initializeDownload()
     LOGD("HEAD请求已发送，等待响应...");
 }
 
+void DownloadTask::handleHeadRequestError(const QString& errorString)
+{
+    LOGD(QString("处理HEAD请求错误:%1").arg(errorString));
+    
+    // 清理网络资源
+    m_headReply->deleteLater();
+    m_headManager->deleteLater();
+    m_headReply = nullptr;
+    m_headManager = nullptr;
+    
+    emit error(tr("HEAD请求失败: %1").arg(errorString));
+    setStatus(DownloadTaskStatus::Failed);
+    saveToHistory("Failed");
+    emit finished();
+}
+
+void DownloadTask::processHeadResponse()
+{
+    QMutexLocker locker(&m_mutex);
+    m_totalSize = m_headReply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
+    LOGD(QString("文件大小:%1 字节").arg(m_totalSize));
+    
+    if (m_totalSize <= 0) {
+        LOGD("无法获取内容长度，强制使用单线程下载");
+        m_threadCount = 1;
+    }
+
+    bool acceptRanges = m_headReply->rawHeader("Accept-Ranges") == "bytes";
+    LOGD(QString("服务器支持Range请求:%1").arg(acceptRanges ? "是" : "否"));
+    
+    if (!acceptRanges && m_threadCount > 1) {
+        LOGD("服务器不支持Range请求，强制使用单线程下载");
+        m_threadCount = 1;
+    }
+    
+    LOGD(QString("最终线程数:%1").arg(m_threadCount));
+}
+
 void DownloadTask::onHeadRequestFinished()
 {
     LOGD("HEAD请求完成，检查响应...");
     
-    // 检查请求是否已超时
     if (m_headRequestTimedOut) {
         LOGD("HEAD请求已超时，忽略此回调");
         return;
     }
     
     if (m_headReply->error() != QNetworkReply::NoError) {
-        QString errorString = m_headReply->errorString();
-        LOGD(QString("HEAD请求失败:%1").arg(errorString));
-        
-        // 清理网络资源
-        m_headReply->deleteLater();
-        m_headManager->deleteLater();
-        m_headReply = nullptr;
-        m_headManager = nullptr;
-        
-        emit error(tr("HEAD请求失败: %1").arg(errorString));
-        setStatus(DownloadTaskStatus::Failed);
-        saveToHistory("Failed");
-        emit finished();
+        handleHeadRequestError(m_headReply->errorString());
         return;
     }
     
     LOGD("HEAD请求成功，开始解析响应头...");
-
-    {
-        QMutexLocker locker(&m_mutex); // 保护m_totalSize和m_threadCount
-        m_totalSize = m_headReply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
-        LOGD(QString("文件大小:%1 字节").arg(m_totalSize));
-        
-        if (m_totalSize <= 0) {
-            // 如果无法获取文件大小，则尝试单线程下载
-            LOGD("无法获取内容长度，强制使用单线程下载");
-            m_threadCount = 1;
-        }
-
-        // 检查是否支持Range请求
-        bool acceptRanges = m_headReply->rawHeader("Accept-Ranges") == "bytes";
-        LOGD(QString("服务器支持Range请求:%1").arg(acceptRanges ? "是" : "否"));
-        
-        if (!acceptRanges && m_threadCount > 1) {
-            LOGD("服务器不支持Range请求，强制使用单线程下载");
-            m_threadCount = 1;
-        }
-        
-        LOGD(QString("最终线程数:%1").arg(m_threadCount));
-    }
+    processHeadResponse();
 
     LOGD("清理HEAD请求资源");
     m_headReply->deleteLater();
@@ -443,8 +506,6 @@ void DownloadTask::onHeadRequestFinished()
     m_headManager = nullptr;
 
     LOGD("开始创建HttpWorkers...");
-    
-    // 使用QTimer::singleShot异步创建workers，避免阻塞主线程
     QPointer<DownloadTask> safeThis(this);
     QTimer::singleShot(0, this, [safeThis]() {
         if (safeThis) {
@@ -676,11 +737,8 @@ bool DownloadTask::allWorkersFinished() const
     return finishedWorkers == threadCount;
 }
 
-bool DownloadTask::mergeFiles()
+bool DownloadTask::prepareFinalFile(QFile& finalFile)
 {
-    LOGD("开始合并文件");
-    
-    // 确保目标目录存在
     QFileInfo fileInfo(m_filePath);
     QDir dir = fileInfo.dir();
     if (!dir.exists()) {
@@ -691,95 +749,102 @@ bool DownloadTask::mergeFiles()
         }
     }
 
-    QFile finalFile(m_filePath);
     if (!finalFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         LOGD(QString("无法打开最终文件进行写入:%1 错误:%2").arg(m_filePath).arg(finalFile.errorString()));
+        return false;
+    }
+    return true;
+}
+
+bool DownloadTask::mergeTempFile(const QString& tempFilePath, QFile& finalFile, qint64& totalBytesWritten)
+{
+    QFile tempFile(tempFilePath);
+    if (!tempFile.exists()) {
+        LOGD(QString("临时文件不存在，合并失败:%1").arg(tempFilePath));
+        return false;
+    }
+
+    qint64 tempFileSize = tempFile.size();
+    if (!tempFile.open(QIODevice::ReadOnly)) {
+        LOGD(QString("无法打开临时文件进行读取:%1 错误:%2").arg(tempFilePath).arg(tempFile.errorString()));
+        return false;
+    }
+
+    QByteArray buffer;
+    qint64 partBytesWritten = 0;
+    while (!tempFile.atEnd()) {
+        buffer = tempFile.read(1024 * 1024); // 1MB buffer
+        qint64 bytesRead = buffer.size();
+        if (bytesRead == 0) break;
+
+        qint64 bytesWritten = finalFile.write(buffer);
+        if (bytesWritten != bytesRead) {
+            LOGD(QString("写入最终文件失败，期望:%1 实际:%2").arg(bytesRead).arg(bytesWritten));
+            tempFile.close();
+            return false;
+        }
+        totalBytesWritten += bytesWritten;
+        partBytesWritten += bytesWritten;
+    }
+    tempFile.close();
+    LOGD(QString("临时文件%1合并完成，写入字节数:%2").arg(QFileInfo(tempFilePath).fileName()).arg(partBytesWritten));
+    return true;
+}
+
+bool DownloadTask::validateFinalFile(qint64 totalBytesWritten, qint64 expectedSize)
+{
+    QFileInfo finalFileInfo(m_filePath);
+    if (finalFileInfo.size() != expectedSize) {
+        LOGD(QString("最终文件大小与期望不符，实际:%1 期望:%2").arg(finalFileInfo.size()).arg(expectedSize));
+        QFile::remove(m_filePath);
+        return false;
+    }
+
+    if (finalFileInfo.size() != totalBytesWritten) {
+        LOGD(QString("最终文件大小与写入字节数不符，实际:%1 写入:%2").arg(finalFileInfo.size()).arg(totalBytesWritten));
+        QFile::remove(m_filePath);
+        return false;
+    }
+
+    LOGD(QString("最终文件大小验证通过:%1字节").arg(finalFileInfo.size()));
+    return true;
+}
+
+bool DownloadTask::mergeFiles()
+{
+    LOGD("开始合并文件");
+    
+    QFile finalFile(m_filePath);
+    if (!prepareFinalFile(finalFile)) {
         return false;
     }
 
     qint64 totalBytesWritten = 0;
     qint64 totalTempFileSize = 0;
-    int threadCount;
-    
-    {
-        QMutexLocker locker(&m_mutex); // 保护m_threadCount
-        threadCount = m_threadCount;
-    }
+    int threadCount = getThreadCount();
     
     LOGD(QString("开始合并%1个临时文件").arg(threadCount));
     
     for (int i = 0; i < threadCount; ++i) {
         QString tempFilePath = m_filePath + QString(".part%1").arg(i);
-        QFile tempFile(tempFilePath);
-        
-        LOGD(QString("处理临时文件%1:%2").arg(i).arg(tempFilePath));
-        
-        if (!tempFile.exists()) {
-            LOGD(QString("临时文件不存在，合并失败:%1").arg(tempFilePath));
-            finalFile.close();
-            return false; // 如果临时文件不存在，则合并失败
-        }
-        
-        qint64 tempFileSize = tempFile.size();
-        totalTempFileSize += tempFileSize;
-        LOGD(QString("临时文件%1大小:%2字节").arg(i).arg(tempFileSize));
-        
-        if (!tempFile.open(QIODevice::ReadOnly)) {
-            LOGD(QString("无法打开临时文件进行读取:%1 错误:%2").arg(tempFilePath).arg(tempFile.errorString()));
+        if (!mergeTempFile(tempFilePath, finalFile, totalBytesWritten)) {
             finalFile.close();
             return false;
         }
-        
-        QByteArray buffer;
-        qint64 bytesRead = 0;
-        qint64 partBytesWritten = 0;
-        while (!tempFile.atEnd()) {
-            buffer = tempFile.read(1024 * 1024); // 1MB buffer
-            bytesRead = buffer.size();
-            if (bytesRead == 0) {
-                break;
-            }
-            qint64 bytesWritten = finalFile.write(buffer);
-            if (bytesWritten != bytesRead) {
-                LOGD(QString("写入最终文件失败，期望:%1 实际:%2").arg(bytesRead).arg(bytesWritten));
-                tempFile.close();
-                finalFile.close();
-                return false;
-            }
-            totalBytesWritten += bytesWritten;
-            partBytesWritten += bytesWritten;
-        }
-        tempFile.close();
-        LOGD(QString("临时文件%1合并完成，写入字节数:%2").arg(i).arg(partBytesWritten));
+        totalTempFileSize += QFileInfo(tempFilePath).size();
     }
     
     finalFile.close();
     
-    qint64 totalSize;
-    {
-        QMutexLocker locker(&m_mutex); // 保护m_totalSize
-        totalSize = m_totalSize;
-    }
-    
+    qint64 totalSize = getTotalSize();
     LOGD(QString("文件合并完成，总写入字节数:%1 临时文件总大小:%2 期望总大小:%3").arg(totalBytesWritten).arg(totalTempFileSize).arg(totalSize));
     
-    // 验证文件大小
-    QFileInfo finalFileInfo(m_filePath);
-    if (finalFileInfo.size() != totalSize) {
-        LOGD(QString("最终文件大小与期望不符，实际:%1 期望:%2").arg(finalFileInfo.size()).arg(totalSize));
-        finalFile.remove(); // 删除不完整的文件
-        return false;
-    }
-    
-    if (finalFileInfo.size() != totalBytesWritten) {
-        LOGD(QString("最终文件大小与写入字节数不符，实际:%1 写入:%2").arg(finalFileInfo.size()).arg(totalBytesWritten));
-        finalFile.remove(); // 删除不完整的文件
+    if (!validateFinalFile(totalBytesWritten, totalSize)) {
         return false;
     }
 
-    LOGD(QString("最终文件大小验证通过:%1字节").arg(finalFileInfo.size()));
-    
-    return true; // 合并成功
+    updateDownloadedSize(totalSize);
+    return true;
 }
 
 void DownloadTask::deleteTempFiles()
@@ -802,46 +867,48 @@ void DownloadTask::deleteTempFiles()
     LOGD("临时文件删除完成");
 }
 
+int DownloadTask::getThreadCount() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_threadCount;
+}
+
+qint64 DownloadTask::getTotalSize() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_totalSize;
+}
+
+void DownloadTask::updateDownloadedSize(qint64 size)
+{
+    QMutexLocker locker(&m_mutex);
+    m_downloadedSize = size;
+}
+
 void DownloadTask::saveToHistory(const QString& status)
 {
     LOGD(QString("开始保存任务历史记录，状态:%1").arg(status));
     
-    LOGD("创建DownloadRecord对象");
+    // 准备记录数据（不需要锁）
     DownloadRecord record;
-    LOGD("DownloadRecord对象创建完成");
     
+    // 使用专用锁快速拷贝数据
     {
-        LOGD("获取mutex锁保护成员变量");
-        QMutexLocker locker(&m_mutex); // 保护成员变量
-        LOGD("mutex锁获取成功，开始填充记录数据");
-        
+        QMutexLocker locker(&m_historyMutex);
         record.url = m_url.toString();
-        LOGD(QString("设置URL: %1").arg(record.url));
-        
         record.filePath = m_filePath;
-        LOGD(QString("设置文件路径: %1").arg(record.filePath));
-        
         record.fileSize = m_totalSize;
-        LOGD(QString("设置文件大小: %1").arg(record.fileSize));
-        
         record.startTime = m_startTime;
-        LOGD(QString("设置开始时间: %1").arg(record.startTime.toString()));
-        
         record.finishTime = m_finishTime;
-        LOGD(QString("设置结束时间: %1").arg(record.finishTime.toString()));
-        
         record.fileName = m_fileName;
-        LOGD(QString("设置文件名: %1").arg(record.fileName));
-        
-        LOGD("成员变量数据填充完成");
     }
-    LOGD("mutex锁已释放");
     
     record.status = status;
-    LOGD(QString("设置状态: %1").arg(record.status));
     
-    LOGD("准备调用HistoryManager::instance().addRecord()");
-    HistoryManager::instance().addRecord(record);
-    LOGD("HistoryManager::instance().addRecord()调用完成");
-    LOGD("任务历史记录保存完成");
+    // 在锁外执行数据库操作
+    QTimer::singleShot(0, this, [record]() {
+        HistoryManager::instance().addRecord(record);
+    });
+    
+    LOGD("历史记录保存请求已提交");
 }

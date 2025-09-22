@@ -40,6 +40,11 @@ public:
      * @brief 停止下载。
      */
     void stop();
+    
+    /**
+     * @brief 异步停止下载。
+     */
+    void stopAsync();
 
 signals:
     /**
