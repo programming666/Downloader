@@ -681,7 +681,7 @@ void MainWindow::onTaskAdded(DownloadTask* task)
         
         // 系统通知
         LOGD("显示系统托盘通知");
-        m_systemTray->showMessage(tr("新任务"), tr("已添加任务：%1").arg(task->fileName()), QSystemTrayIcon::Information, 3000);
+        showSystemNotification(tr("新任务"), tr("已添加任务：%1").arg(task->fileName()), QSystemTrayIcon::Information);
         LOGD("系统托盘通知已显示");
     } else {
         LOGD("任务指针为空，无法添加");
@@ -811,7 +811,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
 {
     if (m_systemTray && m_systemTray->isVisible()) {
         hide(); // 隐藏主窗口
-        m_systemTray->showMessage(tr("下载器正在后台运行"), tr("点击图标可恢复窗口。"), QSystemTrayIcon::Information, 2000);
+        showSystemNotification(tr("下载器正在后台运行"), tr("点击图标可恢复窗口。"), QSystemTrayIcon::Information);
         event->ignore(); // 忽略关闭事件，阻止程序退出
     } else {
         // 如果没有托盘图标或者用户选择退出，则正常关闭
