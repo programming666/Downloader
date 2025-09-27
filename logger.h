@@ -13,19 +13,36 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QString>
+#include <QSettings>
+#include <QDir>
+
+/**
+ * @brief 从配置文件读取日志路径
+ * @return 日志文件路径
+ */
+static QString getLogPath() {
+    QString configPath = QDir::current().absoluteFilePath("logs_config.txt");
+    if (QFile::exists(configPath)) {
+        QSettings settings(configPath, QSettings::IniFormat);
+        return settings.value("log_path", "D:/LOG/downloader.log").toString();
+    }
+    return "D:/LOG/downloader.log";
+}
 
 /**
  * @brief 将日志消息写入文件
  * @param message 要记录的日志消息
  * 
  * 日志格式：[时间] 消息内容
- * 日志文件路径固定为"D:/LOG/downloader.log"
+ * 日志文件路径从配置文件读取，默认为"D:/LOG/downloader.log"
  * 如果文件打开失败，则静默失败
  */
 static void logToFile(const QString& message) {
-    QFile f("D:/LOG/downloader.log");
+    QString logPath = getLogPath();
+    QFile f(logPath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Append)) return;
     QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8); // 设置UTF-8编码
     ts << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz ") << message << "\n";
     f.close();
 }

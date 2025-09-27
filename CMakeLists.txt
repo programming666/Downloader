@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Network Sql Gui Concurrent)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Network Gui Concurrent)
 if(TARGET Qt6::Concurrent)
     message(STATUS "找到Qt6 Concurrent模块")
 else()
@@ -42,6 +42,14 @@ qt_add_executable(Downloader
     settingsdialog.cpp
     settingsdialog.h
     settingsdialog.ui
+    scheduledialog.cpp
+    scheduledialog.h
+    scheduledialog.ui
+    schedulemanager.cpp
+    schedulemanager.h
+    historydialog.cpp
+    historydialog.h
+    historydialog.ui
     icon.qrc
 )
 target_link_libraries(Downloader
@@ -49,7 +57,6 @@ target_link_libraries(Downloader
         Qt6::Core
         Qt6::Widgets
         Qt6::Network
-        Qt6::Sql
         Qt6::Gui
         Qt6::Concurrent
 )

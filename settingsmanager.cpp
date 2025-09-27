@@ -1,7 +1,7 @@
 #include "settingsmanager.h"
 #include <QStandardPaths>
 #include <QDir>
-
+#include "logger.h"
 // 初始化设置键常量
 const QString SettingsManager::GROUP_NETWORK = "Network";
 const QString SettingsManager::KEY_PROXY_TYPE = "ProxyType";
@@ -20,23 +20,32 @@ const QString SettingsManager::KEY_DEFAULT_THREADS = "DefaultThreads";
 const QString SettingsManager::GROUP_LOCAL_SERVER = "LocalServer";
 const QString SettingsManager::KEY_LOCAL_LISTEN_PORT = "ListenPort";
 
+const QString SettingsManager::GROUP_NOTIFICATION = "Notification";
+const QString SettingsManager::KEY_SILENT_MODE = "SilentMode";
+
 /**
  * @brief 设置管理器构造函数
  * 
- * 初始化应用程序组织名称和应用名称，确保设置文件存储在标准位置
- * 创建QSettings实例用于读写应用程序配置，支持跨平台的设置持久化
+ * 初始化应用程序组织名称和应用名称，确保设置存储在Windows注册表中
+ * 创建QSettings实例用于读写应用程序配置，使用注册表存储设置
  * 
  * @param parent 父对象指针
  */
 SettingsManager::SettingsManager(QObject *parent)
     : QObject(parent)
 {
-    // 使用QCoreApplication::organizationName和QCoreApplication::applicationName
-    // 来确保设置文件存储在标准位置
-    QCoreApplication::setOrganizationName("YourOrganization"); // 替换为您的组织名称
-    QCoreApplication::setApplicationName("Downloader"); // 替换为您的应用程序名称
-
+    // 设置应用程序名称和组织名称，确保注册表路径正确
+    if (QCoreApplication::applicationName().isEmpty()) {
+        QCoreApplication::setApplicationName("Downloader");
+    }
+    if (QCoreApplication::organizationName().isEmpty()) {
+        QCoreApplication::setOrganizationName("Programming666");
+    }
+    
+    // 使用默认的QSettings构造函数，在Windows上会自动使用注册表存储
+    // HKEY_CURRENT_USER\Software\Programming666\Downloader
     m_settings = new QSettings(this);
+    LOGD("SettingsManager: 使用注册表存储设置");
 }
 
 SettingsManager::~SettingsManager()
@@ -199,4 +208,19 @@ quint16 SettingsManager::loadLocalListenPort() const
     quint16 port = m_settings->value(KEY_LOCAL_LISTEN_PORT, 8080).toUInt(); // 默认端口8080
     m_settings->endGroup();
     return port;
+}
+
+void SettingsManager::saveSilentMode(bool silent)
+{
+    m_settings->beginGroup(GROUP_NOTIFICATION);
+    m_settings->setValue(KEY_SILENT_MODE, silent);
+    m_settings->endGroup();
+}
+
+bool SettingsManager::loadSilentMode() const
+{
+    m_settings->beginGroup(GROUP_NOTIFICATION);
+    bool silent = m_settings->value(KEY_SILENT_MODE, false).toBool(); // 默认不启用静默模式
+    m_settings->endGroup();
+    return silent;
 }

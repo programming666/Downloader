@@ -22,6 +22,9 @@
 #include "systemtray.h"
 #include "settingsmanager.h"
 #include "historymanager.h"
+#include "schedulemanager.h"
+#include "scheduledialog.h"
+#include "historydialog.h"
 #include <QSet>
 
 QT_BEGIN_NAMESPACE
@@ -141,7 +144,7 @@ private slots:
 
     /**
      * @brief 切换应用程序语言。
-     * @param language 语言代码 ("zh_CN" 或 "en_US")。
+     * @param language 语言代码 ("zh_CN" 或 "en_US").
      */
     void switchLanguage(const QString& language);
 
@@ -149,6 +152,27 @@ private slots:
      * @brief 更新语言菜单状态。
      */
     void updateLanguageMenu();
+
+    /**
+     * @brief 处理定时下载任务触发。
+     * @param task 触发的定时任务。
+     */
+    void onScheduledTaskTriggered(const ScheduledTask& task);
+
+    /**
+     * @brief 处理定时任务列表改变。
+     */
+    void onScheduledTasksChanged();
+
+    /**
+     * @brief 处理定时下载按钮点击事件。
+     */
+    void on_actionScheduleTask_triggered();
+
+    /**
+     * @brief 处理查看历史记录按钮点击事件。
+     */
+    void on_actionViewHistory_triggered();
 
 private slots:
     /**

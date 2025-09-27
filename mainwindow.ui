@@ -38,6 +38,7 @@
      <string>文件</string>
     </property>
     <addaction name="actionNewTask"/>
+    <addaction name="actionScheduleTask"/>
     <addaction name="separator"/>
     <addaction name="actionExit"/>
    </widget>
@@ -67,6 +68,12 @@
     <addaction name="actionChinese"/>
     <addaction name="actionEnglish"/>
    </widget>
+   <widget class="QMenu" name="menuHistory">
+    <property name="title">
+     <string>历史</string>
+    </property>
+    <addaction name="actionViewHistory"/>
+   </widget>
    <widget class="QMenu" name="menuHelp">
     <property name="title">
      <string>帮助</string>
@@ -75,6 +82,7 @@
    </widget>
    <addaction name="menuFile"/>
    <addaction name="menuTask"/>
+   <addaction name="menuHistory"/>
    <addaction name="menuSettings"/>
    <addaction name="menuLanguage"/>
    <addaction name="menuHelp"/>
@@ -209,6 +217,18 @@
     <string>关于本程序</string>
    </property>
   </action>
+  <action name="actionScheduleTask">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/schedule.png</normaloff>:/icons/schedule.png</iconset>
+   </property>
+   <property name="text">
+    <string>定时下载</string>
+   </property>
+   <property name="toolTip">
+    <string>设置定时下载任务</string>
+   </property>
+  </action>
   <action name="actionExit">
    <property name="text">
     <string>退出</string>
@@ -231,6 +251,18 @@
    </property>
    <property name="toolTip">
     <string>Switch to English interface</string>
+   </property>
+  </action>
+  <action name="actionViewHistory">
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icons/history.png</normaloff>:/icons/history.png</iconset>
+   </property>
+   <property name="text">
+    <string>查看历史</string>
+   </property>
+   <property name="toolTip">
+    <string>查看下载历史记录</string>
    </property>
   </action>
  </widget>
