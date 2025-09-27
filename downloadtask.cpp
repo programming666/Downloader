@@ -438,6 +438,14 @@ void DownloadTask::initializeDownload()
             safeHeadReply->abort();
             // 标记超时状态避免后续处理
             safeThis->m_headRequestTimedOut = true;
+            
+            // 超时后立即处理错误，避免等待其他回调
+            QTimer::singleShot(100, safeThis, [safeThis]() {
+                if (safeThis && safeThis->m_status != DownloadTaskStatus::Failed) {
+                    LOGD("处理HEAD请求超时错误");
+                    safeThis->handleHeadRequestError(tr("HEAD请求超时（20秒）"));
+                }
+            });
         }
     });
 
@@ -448,11 +456,21 @@ void DownloadTask::handleHeadRequestError(const QString& errorString)
 {
     LOGD(QString("处理HEAD请求错误:%1").arg(errorString));
     
+    // 检查是否已经处理过错误（避免重复处理）
+    if (m_status == DownloadTaskStatus::Failed) {
+        LOGD("HEAD请求错误已处理，忽略重复处理");
+        return;
+    }
+    
     // 清理网络资源
-    m_headReply->deleteLater();
-    m_headManager->deleteLater();
-    m_headReply = nullptr;
-    m_headManager = nullptr;
+    if (m_headReply) {
+        m_headReply->deleteLater();
+        m_headReply = nullptr;
+    }
+    if (m_headManager) {
+        m_headManager->deleteLater();
+        m_headManager = nullptr;
+    }
     
     emit error(tr("HEAD请求失败: %1").arg(errorString));
     setStatus(DownloadTaskStatus::Failed);
@@ -491,6 +509,12 @@ void DownloadTask::onHeadRequestFinished()
         return;
     }
     
+    // 检查是否已经处理过错误（避免重复处理）
+    if (m_status == DownloadTaskStatus::Failed) {
+        LOGD("HEAD请求错误已处理，忽略此回调");
+        return;
+    }
+    
     if (m_headReply->error() != QNetworkReply::NoError) {
         handleHeadRequestError(m_headReply->errorString());
         return;
@@ -526,6 +550,12 @@ void DownloadTask::onHeadRequestError(QNetworkReply::NetworkError code)
     // 检查请求是否已超时
     if (m_headRequestTimedOut) {
         LOGD("HEAD请求已超时，忽略此错误回调");
+        return;
+    }
+    
+    // 检查是否已经处理过错误（避免重复处理）
+    if (m_status == DownloadTaskStatus::Failed) {
+        LOGD("HEAD请求错误已处理，忽略此回调");
         return;
     }
     

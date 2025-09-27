@@ -71,6 +71,9 @@ void SettingsDialog::loadSettingsToUi()
     // 加载本地监听端口
     ui->localListenPortSpinBox->setValue(SettingsManager::instance().loadLocalListenPort());
 
+    // 加载静默模式设置
+    ui->silentModeCheckBox->setChecked(SettingsManager::instance().loadSilentMode());
+
     // 加载主题
     QString currentTheme = SettingsManager::instance().loadTheme();
     int themeIndex = ui->themeComboBox->findData(currentTheme);
@@ -99,6 +102,9 @@ void SettingsDialog::saveSettingsFromUi()
 
     // 保存本地监听端口
     SettingsManager::instance().saveLocalListenPort(ui->localListenPortSpinBox->value());
+
+    // 保存静默模式设置
+    SettingsManager::instance().saveSilentMode(ui->silentModeCheckBox->isChecked());
 
     // 保存主题
     SettingsManager::instance().saveTheme(ui->themeComboBox->currentData().toString());

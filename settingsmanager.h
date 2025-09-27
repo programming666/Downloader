@@ -92,10 +92,22 @@ public:
     void saveLocalListenPort(quint16 port);
 
     /**
-     * @brief 加载本地监听端口。
-     * @return 本地监听端口号。
+     * @brief 加载本地监听端口
+     * @return 返回本地监听端口号
      */
     quint16 loadLocalListenPort() const;
+
+    /**
+     * @brief 保存静默模式设置
+     * @param silent 是否启用静默模式
+     */
+    void saveSilentMode(bool silent);
+
+    /**
+     * @brief 加载静默模式设置
+     * @return 返回是否启用静默模式
+     */
+    bool loadSilentMode() const;
 
 signals:
     /**
@@ -131,6 +143,9 @@ private:
 
     static const QString GROUP_LOCAL_SERVER;
     static const QString KEY_LOCAL_LISTEN_PORT;
+
+    static const QString GROUP_NOTIFICATION;
+    static const QString KEY_SILENT_MODE;
 };
 
 #endif // SETTINGSMANAGER_H

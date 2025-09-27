@@ -49,6 +49,13 @@ MainWindow::MainWindow(QWidget *parent)
     connect(&m_downloadManager, &DownloadManager::taskAdded, this, &MainWindow::onTaskAdded);
     connect(&m_settingsManager, &SettingsManager::themeChanged, this, &MainWindow::onThemeChanged);
 
+    // 连接定时下载管理器信号
+    ScheduleManager* scheduleManager = ScheduleManager::instance();
+    connect(scheduleManager, &ScheduleManager::scheduledTaskTriggered, 
+            this, &MainWindow::onScheduledTaskTriggered);
+    connect(scheduleManager, &ScheduleManager::scheduledTasksChanged,
+            this, &MainWindow::onScheduledTasksChanged);
+
     // 加载上次保存的主题
     loadStyleSheet(m_settingsManager.loadTheme());
 
@@ -315,7 +322,17 @@ void MainWindow::removeTaskFromTable(DownloadTask* task)
 
 void MainWindow::showSystemNotification(const QString& title, const QString& message, QSystemTrayIcon::MessageIcon icon)
 {
+    // 检查是否启用静默模式
+    bool silentMode = m_settingsManager.loadSilentMode();
+    qDebug() << "静默模式状态:" << silentMode << "标题:" << title;
+    
+    if (silentMode) {
+        qDebug() << "静默模式已启用，不显示通知:" << title;
+        return; // 静默模式下不显示通知
+    }
+    
     if (m_systemTray) {
+        qDebug() << "显示系统通知:" << title << "-" << message;
         m_systemTray->showMessage(title, message, icon);
     }
 }
@@ -1072,4 +1089,121 @@ void MainWindow::setupResponsiveTableColumns()
     setupTableBasicProperties();
     configureColumnWidths();
     setupHeaderBehavior();
+}
+
+/**
+ * @brief 处理定时下载任务触发
+ * @param task 触发的定时任务
+ * 
+ * 当定时任务到达预定时间时，自动创建并开始下载任务
+ */
+void MainWindow::onScheduledTaskTriggered(const ScheduledTask& task)
+{
+    LOGD(QString("定时任务触发 - 文件:%1 URL:%2").arg(task.fileName).arg(task.url));
+    
+    // 创建下载任务
+    DownloadTask* downloadTask = m_downloadManager.createTask(QUrl(task.url), task.savePath, 4);
+    if (downloadTask) {
+        // 开始下载
+        m_downloadManager.startTask(downloadTask);
+        
+        // 显示系统通知
+        showSystemNotification(tr("定时下载开始"), 
+                              tr("文件 '%1' 定时下载已开始").arg(task.fileName), 
+                              QSystemTrayIcon::Information);
+        
+        LOGD(QString("定时下载任务已开始 - 文件:%1").arg(task.fileName));
+    } else {
+        LOGD(QString("定时下载任务创建失败 - 文件:%1 URL:%2").arg(task.fileName).arg(task.url));
+        
+        showSystemNotification(tr("定时下载失败"), 
+                              tr("文件 '%1' 定时下载失败").arg(task.fileName), 
+                              QSystemTrayIcon::Warning);
+    }
+}
+
+/**
+ * @brief 处理定时任务列表改变
+ * 
+ * 当定时任务列表发生变化时更新相关UI
+ */
+void MainWindow::onScheduledTasksChanged()
+{
+    // 可以在这里更新定时任务列表显示
+    LOGD("定时任务列表已更新");
+}
+
+/**
+ * @brief 处理定时下载按钮点击事件
+ */
+void MainWindow::on_actionScheduleTask_triggered()
+{
+    LOGD("定时下载按钮被点击");
+    
+    // 创建定时下载对话框
+    ScheduleDialog scheduleDialog(this);
+    
+    if (scheduleDialog.exec() == QDialog::Accepted) {
+        // 获取用户输入的URL和保存路径
+        QString url = scheduleDialog.url();
+        QString savePath = scheduleDialog.savePath();
+        
+        if (!url.isEmpty() && !savePath.isEmpty()) {
+            // 创建定时任务
+            ScheduledTask task;
+            task.fileName = QFileInfo(savePath).fileName();
+            task.url = url;
+            task.savePath = savePath;
+            task.isRepeat = scheduleDialog.isRepeat();
+            task.repeatInterval = scheduleDialog.repeatInterval();
+            task.isActive = true;
+            task.type = "scheduled_download"; // 标识为定时下载任务
+            
+            // 根据定时类型设置开始时间
+            ScheduleDialog::ScheduleType type = scheduleDialog.scheduleType();
+            if (type == ScheduleDialog::Immediate) {
+                task.scheduledTime = QDateTime::currentDateTime();
+            } else if (type == ScheduleDialog::SpecificTime) {
+                task.scheduledTime = scheduleDialog.startTime();
+            } else if (type == ScheduleDialog::Delayed) {
+                task.scheduledTime = QDateTime::currentDateTime().addSecs(scheduleDialog.delayMinutes() * 60);
+            }
+            
+            // 添加定时任务
+            ScheduleManager::instance()->addScheduledTask(task);
+            
+            // 显示成功消息
+            QString message;
+            if (type == ScheduleDialog::Immediate) {
+                message = tr("定时下载任务已创建，将立即开始下载");
+            } else if (type == ScheduleDialog::SpecificTime) {
+                message = tr("定时下载任务已创建，将在 %1 开始下载").arg(task.scheduledTime.toString("yyyy-MM-dd hh:mm:ss"));
+            } else {
+                message = tr("定时下载任务已创建，将在 %1 分钟后开始下载").arg(scheduleDialog.delayMinutes());
+            }
+            
+            if (task.isRepeat) {
+                message += tr("，每 %1 小时重复一次").arg(task.repeatInterval);
+            }
+            
+            ui->statusbar->showMessage(message);
+            showSystemNotification(tr("定时下载设置成功"), message, QSystemTrayIcon::Information);
+            
+            LOGD(QString("定时下载任务创建成功 - 文件:%1 时间:%2").arg(task.fileName).arg(task.scheduledTime.toString()));
+        }
+    }
+}
+
+/**
+ * @brief 处理查看历史记录按钮点击事件
+ */
+void MainWindow::on_actionViewHistory_triggered()
+{
+    LOGD("查看历史记录按钮被点击");
+    
+    // 创建历史记录对话框
+    HistoryDialog historyDialog(this);
+    historyDialog.exec();
+    
+    LOGD("历史记录对话框关闭");
 }
