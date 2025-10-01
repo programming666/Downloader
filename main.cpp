@@ -1,7 +1,7 @@
 #include "mainwindow.h"
 #include "settingsmanager.h"
 #include "historymanager.h"
-#include "localserver.h" // 包含LocalServer头文件
+#include "httpserver.h" // 包含HttpServer头文件
 #include "logger.h"
 
 #include <QApplication>
@@ -88,18 +88,18 @@ int main(int argc, char *argv[])
     MainWindow w;
     w.show();
 
-    // 启动本地服务器，接收浏览器插件的下载请求
-    LocalServer localServer;
+    // 启动HTTP服务器，接收浏览器插件的下载请求
+    HttpServer httpServer;
     quint16 listenPort = SettingsManager::instance().loadLocalListenPort();
-    if (!localServer.startServer(listenPort)) {
-        qCritical() << "Failed to start local server on port" << listenPort;
+    if (!httpServer.startServer(listenPort)) {
+        qCritical() << "Failed to start HTTP server on port" << listenPort;
     } else {
-        LOGD(QString("Local server listening on port %1").arg(listenPort));
+        LOGD(QString("HTTP server listening on port %1").arg(listenPort));
     }
     
-    // 连接本地服务器信号到主窗口槽函数
+    // 连接HTTP服务器信号到主窗口槽函数
     // 当浏览器插件发送下载请求时，主窗口会弹出新建任务对话框
-    QObject::connect(&localServer, &LocalServer::newDownloadRequest,
+    QObject::connect(&httpServer, &HttpServer::newDownloadRequest,
                      &w, &MainWindow::onNewDownloadRequestFromBrowser);
 
     // 进入Qt事件循环，等待用户交互和系统事件
