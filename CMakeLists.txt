@@ -9,6 +9,15 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Network Gui Concurrent)
+# 检查Qt6是否支持HttpServer模块
+find_package(Qt6 COMPONENTS HttpServer REQUIRED)
+if(TARGET Qt6::HttpServer)
+    message(STATUS "找到Qt6 HttpServer模块")
+    # 定义宏以启用QHttpServer
+    add_definitions(-DQT_HTTPSERVER_LIB)
+else()
+    message(STATUS "未找到Qt6 HttpServer模块，将使用QTcpServer实现HTTP服务器")
+endif()
 if(TARGET Qt6::Concurrent)
     message(STATUS "找到Qt6 Concurrent模块")
 else()
@@ -36,6 +45,8 @@ qt_add_executable(Downloader
     systemtray.h
     localserver.cpp
     localserver.h
+    httpserver.cpp
+    httpserver.h
     newtaskdialog.cpp
     newtaskdialog.h
     newtaskdialog.ui
@@ -60,6 +71,10 @@ target_link_libraries(Downloader
         Qt6::Gui
         Qt6::Concurrent
 )
+# 如果HttpServer模块可用，则链接它
+if(TARGET Qt6::HttpServer)
+    target_link_libraries(Downloader PRIVATE Qt6::HttpServer)
+endif()
 include(GNUInstallDirs)
 install(TARGETS Downloader
     BUNDLE  DESTINATION .
