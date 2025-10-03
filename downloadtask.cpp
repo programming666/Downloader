@@ -8,6 +8,7 @@
 #include <QThreadPool>
 #include <QMetaObject>
 #include <QPointer>
+#include <QStandardPaths>
 #include "historymanager.h"
 
 /**
@@ -46,6 +47,10 @@ DownloadTask::DownloadTask(const QUrl& url, const QString& savePath, int threadC
     QFileInfo fileInfo(m_filePath);
     m_fileName = fileInfo.fileName();
     LOGD(QString("提取文件名:%1").arg(m_fileName));
+    
+    // 获取系统临时目录
+    m_tempDirectory = getTempDirectory();
+    LOGD(QString("临时目录:%1").arg(m_tempDirectory));
     
     LOGD("DownloadTask构造完成");
 
@@ -596,7 +601,8 @@ void DownloadTask::createHttpWorkers()
     if (m_totalSize <= 0 || m_threadCount == 1) {
         // 单线程下载
         LOGD("使用单线程下载模式");
-        QString tempFilePath = m_filePath + ".part0";
+        QString tempFileName = QFileInfo(m_filePath).fileName() + ".part0";
+        QString tempFilePath = QDir(m_tempDirectory).filePath(tempFileName);
         LOGD(QString("创建单线程worker，临时文件:%1").arg(tempFilePath));
         HttpWorker* worker = new HttpWorker(m_url, tempFilePath, 0, m_totalSize - 1);
         m_workers.append(worker);
@@ -612,10 +618,13 @@ void DownloadTask::createHttpWorkers()
     LOGD(QString("使用多线程下载模式，文件大小:%1").arg(m_totalSize));
     
     qint64 chunkSize = m_totalSize / m_threadCount;
+    QString baseFileName = QFileInfo(m_filePath).fileName();
+    
     for (int i = 0; i < m_threadCount; ++i) {
         qint64 startPoint = i * chunkSize;
         qint64 endPoint = (i == m_threadCount - 1) ? m_totalSize - 1 : (startPoint + chunkSize - 1);
-        QString tempFilePath = m_filePath + QString(".part%1").arg(i);
+        QString tempFileName = baseFileName + QString(".part%1").arg(i);
+        QString tempFilePath = QDir(m_tempDirectory).filePath(tempFileName);
 
         LOGD(QString("创建worker%1 范围:%2-%3 临时文件:%4").arg(i).arg(startPoint).arg(endPoint).arg(tempFilePath));
         
@@ -844,8 +853,13 @@ bool DownloadTask::mergeFiles()
 {
     LOGD("开始合并文件");
     
-    QFile finalFile(m_filePath);
-    if (!prepareFinalFile(finalFile)) {
+    // 在临时目录中创建临时合并文件
+    QString tempMergeFileName = QFileInfo(m_filePath).fileName() + ".merge";
+    QString tempMergeFilePath = QDir(m_tempDirectory).filePath(tempMergeFileName);
+    
+    QFile tempMergeFile(tempMergeFilePath);
+    if (!tempMergeFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        LOGD(QString("无法创建临时合并文件:%1 错误:%2").arg(tempMergeFilePath).arg(tempMergeFile.errorString()));
         return false;
     }
 
@@ -853,27 +867,45 @@ bool DownloadTask::mergeFiles()
     qint64 totalTempFileSize = 0;
     int threadCount = getThreadCount();
     
-    LOGD(QString("开始合并%1个临时文件").arg(threadCount));
+    LOGD(QString("开始合并%1个临时文件到临时合并文件:%2").arg(threadCount).arg(tempMergeFilePath));
     
     for (int i = 0; i < threadCount; ++i) {
-        QString tempFilePath = m_filePath + QString(".part%1").arg(i);
-        if (!mergeTempFile(tempFilePath, finalFile, totalBytesWritten)) {
-            finalFile.close();
+        QString tempFileName = QFileInfo(m_filePath).fileName() + QString(".part%1").arg(i);
+        QString tempFilePath = QDir(m_tempDirectory).filePath(tempFileName);
+        if (!mergeTempFile(tempFilePath, tempMergeFile, totalBytesWritten)) {
+            tempMergeFile.close();
+            QFile::remove(tempMergeFilePath); // 清理临时合并文件
             return false;
         }
         totalTempFileSize += QFileInfo(tempFilePath).size();
     }
     
-    finalFile.close();
+    tempMergeFile.close();
     
     qint64 totalSize = getTotalSize();
     LOGD(QString("文件合并完成，总写入字节数:%1 临时文件总大小:%2 期望总大小:%3").arg(totalBytesWritten).arg(totalTempFileSize).arg(totalSize));
     
+    // 验证临时合并文件的大小
+    if (totalBytesWritten != totalSize) {
+        LOGD(QString("临时合并文件大小与期望不符，实际:%1 期望:%2").arg(totalBytesWritten).arg(totalSize));
+        QFile::remove(tempMergeFilePath);
+        return false;
+    }
+    
+    // 将临时合并文件移动到最终位置
+    if (!moveFileToFinalLocation(tempMergeFilePath, m_filePath)) {
+        LOGD(QString("无法将临时合并文件移动到最终位置:%1 -> %2").arg(tempMergeFilePath).arg(m_filePath));
+        QFile::remove(tempMergeFilePath);
+        return false;
+    }
+    
+    // 验证最终文件
     if (!validateFinalFile(totalBytesWritten, totalSize)) {
         return false;
     }
 
     updateDownloadedSize(totalSize);
+    LOGD(QString("文件成功移动到最终位置:%1").arg(m_filePath));
     return true;
 }
 
@@ -888,10 +920,21 @@ void DownloadTask::deleteTempFiles()
     
     LOGD(QString("开始删除%1个临时文件").arg(threadCount));
     
+    QString baseFileName = QFileInfo(m_filePath).fileName();
+    
     for (int i = 0; i < threadCount; ++i) {
-        QString tempFilePath = m_filePath + QString(".part%1").arg(i);
+        QString tempFileName = baseFileName + QString(".part%1").arg(i);
+        QString tempFilePath = QDir(m_tempDirectory).filePath(tempFileName);
         bool removed = QFile::remove(tempFilePath);
         LOGD(QString("删除临时文件%1:%2 结果:%3").arg(i).arg(tempFilePath).arg(removed ? "成功" : "失败"));
+    }
+    
+    // 也尝试删除临时合并文件（如果存在）
+    QString tempMergeFileName = baseFileName + ".merge";
+    QString tempMergeFilePath = QDir(m_tempDirectory).filePath(tempMergeFileName);
+    if (QFile::exists(tempMergeFilePath)) {
+        bool removed = QFile::remove(tempMergeFilePath);
+        LOGD(QString("删除临时合并文件:%1 结果:%2").arg(tempMergeFilePath).arg(removed ? "成功" : "失败"));
     }
     
     LOGD("临时文件删除完成");
@@ -941,4 +984,72 @@ void DownloadTask::saveToHistory(const QString& status)
     });
     
     LOGD("历史记录保存请求已提交");
+}
+
+QString DownloadTask::getTempDirectory() const
+{
+    // 优先使用环境变量中的临时目录
+    QString tempPath = QString::fromLocal8Bit(qgetenv("TEMP"));
+    if (tempPath.isEmpty()) {
+        tempPath = QString::fromLocal8Bit(qgetenv("TMP"));
+    }
+    
+    // 如果环境变量没有设置，使用Qt的标准临时目录
+    if (tempPath.isEmpty()) {
+        tempPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    }
+    
+    // 确保目录存在
+    QDir tempDir(tempPath);
+    if (!tempDir.exists()) {
+        tempDir.mkpath(".");
+    }
+    
+    LOGD(QString("获取临时目录:%1").arg(tempPath));
+    return tempPath;
+}
+
+bool DownloadTask::moveFileToFinalLocation(const QString& tempFilePath, const QString& finalFilePath)
+{
+    LOGD(QString("开始移动文件从临时目录到最终位置: %1 -> %2").arg(tempFilePath).arg(finalFilePath));
+    
+    // 确保目标目录存在
+    QFileInfo finalFileInfo(finalFilePath);
+    QDir targetDir = finalFileInfo.dir();
+    if (!targetDir.exists()) {
+        if (!targetDir.mkpath(".")) {
+            LOGD(QString("无法创建目标目录:%1").arg(targetDir.path()));
+            return false;
+        }
+    }
+    
+    // 如果目标文件已存在，先删除它
+    if (QFile::exists(finalFilePath)) {
+        if (!QFile::remove(finalFilePath)) {
+            LOGD(QString("无法删除已存在的目标文件:%1").arg(finalFilePath));
+            return false;
+        }
+    }
+    
+    // 尝试重命名（移动）文件
+    if (QFile::rename(tempFilePath, finalFilePath)) {
+        LOGD(QString("文件移动成功:%1 -> %2").arg(tempFilePath).arg(finalFilePath));
+        return true;
+    }
+    
+    // 如果重命名失败，尝试复制然后删除
+    LOGD(QString("重命名失败，尝试复制文件:%1 -> %2").arg(tempFilePath).arg(finalFilePath));
+    if (QFile::copy(tempFilePath, finalFilePath)) {
+        if (QFile::remove(tempFilePath)) {
+            LOGD(QString("文件复制并删除成功:%1 -> %2").arg(tempFilePath).arg(finalFilePath));
+            return true;
+        } else {
+            LOGD(QString("文件复制成功但删除临时文件失败:%1").arg(tempFilePath));
+            // 复制成功但删除失败，也算成功
+            return true;
+        }
+    }
+    
+    LOGD(QString("文件移动失败:%1 -> %2").arg(tempFilePath).arg(finalFilePath));
+    return false;
 }

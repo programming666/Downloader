@@ -198,6 +198,20 @@ private:
     void createHttpWorkers();
 
     /**
+     * @brief 获取系统临时目录路径。
+     * @return 临时目录路径。
+     */
+    QString getTempDirectory() const;
+
+    /**
+     * @brief 将文件从临时目录移动到最终目标位置。
+     * @param tempFilePath 临时文件路径。
+     * @param finalFilePath 最终文件路径。
+     * @return 移动成功返回true，否则返回false。
+     */
+    bool moveFileToFinalLocation(const QString& tempFilePath, const QString& finalFilePath);
+
+    /**
      * @brief 检查所有HttpWorker是否都已完成。
      * @return 如果所有worker都完成则返回true，否则返回false。
      */
@@ -276,6 +290,7 @@ private:
     QUrl m_url;                         ///< 下载文件的URL。
     QString m_filePath;                 ///< 文件保存的本地路径。
     QString m_fileName;                 ///< 文件名。
+    QString m_tempDirectory;            ///< 临时文件存储目录。
     int m_threadCount;                  ///< 下载线程数。
     DownloadTaskStatus m_status;        ///< 当前任务状态。
 
