@@ -38,6 +38,7 @@ DownloadTask::DownloadTask(const QUrl& url, const QString& savePath, int threadC
       m_downloadedSize(0),
       m_lastDownloadedSize(0),
       m_downloadSpeed(0),
+      m_finishTime(), // 默认构造（无效 QDateTime），由完成/取消/失败路径显式设置
       m_headManager(nullptr),
       m_headReply(nullptr),
       m_finishedWorkers(0)
@@ -165,13 +166,15 @@ void DownloadTask::start()
         }
 
         m_startTime = QDateTime::currentDateTime();
-        setStatus(DownloadTaskStatus::Downloading); // 走setStatus，自动用m_statusMutex
-        LOGD(QString("任务状态设置为Downloading，开始时间:%1").arg(m_startTime.toString()));
+        LOGD(QString("任务开始时间:%1").arg(m_startTime.toString()));
 
-        // 使用QPointer安全包装this指针
+        // 使用QPointer安全包装this指针；将状态切换延迟到 lambda 内，
+        // 保证 HEAD 请求真正发起后再把状态从 Pending 翻到 Downloading，
+        // 避免出现"显示 Downloading 但 HEAD 还没发"的窗口
         QPointer<DownloadTask> safeThis(this);
         QTimer::singleShot(0, this, [safeThis]() {
             if (safeThis) {
+                safeThis->setStatus(DownloadTaskStatus::Downloading); // 走setStatus，自动用m_statusMutex
                 LOGD("异步执行initializeDownload()");
                 safeThis->initializeDownload();
             }
@@ -444,11 +447,14 @@ void DownloadTask::initializeDownload()
     LOGD("创建HEAD请求的网络管理器");
     {
         QMutexLocker locker(&m_mutex); // 仅在创建网络管理器时加锁
-        m_headManager = new QNetworkAccessManager(this); // 设置父对象保证在主线程
+        // 不要用 this 作为父对象，HEAD 请求通常早于 DownloadTask 析构；
+        // 如果父对象先析构，QNetworkAccessManager 会跟着销毁，可能正在飞的 reply
+        // 就会 UAF。改成无父对象，由 DownloadTask 显式管理 deleteLater 生命周期。
+        m_headManager = new QNetworkAccessManager();
     }
 
     QNetworkRequest request(m_url);
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::SameOriginRedirectPolicy);
     request.setTransferTimeout(15000); // 15秒超时
     
     // 设置User-Agent，避免被网站屏蔽
@@ -469,16 +475,25 @@ void DownloadTask::initializeDownload()
     // 超时保护
     QPointer<QNetworkReply> safeHeadReply(m_headReply);
     QPointer<DownloadTask> safeThis(this);
-    QTimer::singleShot(20000, this, [safeThis, safeHeadReply]() {
+    QTimer::singleShot(20000, safeThis, [safeThis, safeHeadReply]() {
         if (safeThis && safeHeadReply && !safeHeadReply->isFinished()) {
             LOGD("HEAD请求超时，强制中止");
             safeHeadReply->abort();
             // 标记超时状态避免后续处理（原子操作，防止多超时回调并发写）
             safeThis->m_headRequestTimedOut.storeRelease(1);
-            
-            // 超时后立即处理错误，避免等待其他回调
+
+            // 超时后立即处理错误，避免等待其他回调；
+            // 注意要排除 Cancelled / Completed 状态，避免覆盖 cancel() 后的状态
             QTimer::singleShot(100, safeThis, [safeThis]() {
-                if (safeThis && safeThis->m_status != DownloadTaskStatus::Failed) {
+                if (safeThis) {
+                    QMutexLocker statusLocker(&safeThis->m_statusMutex);
+                    if (safeThis->m_status == DownloadTaskStatus::Failed ||
+                        safeThis->m_status == DownloadTaskStatus::Cancelled ||
+                        safeThis->m_status == DownloadTaskStatus::Completed) {
+                        return;
+                    }
+                }
+                if (safeThis) {
                     LOGD("处理HEAD请求超时错误");
                     safeThis->handleHeadRequestError(tr("HEAD请求超时（20秒）"));
                 }
@@ -520,10 +535,11 @@ void DownloadTask::handleHeadRequestError(const QString& errorString)
 
 void DownloadTask::processHeadResponse()
 {
-    QMutexLocker locker(&m_mutex);
+    // processHeadResponse 仅在主线程 onHeadRequestFinished 内被调用，
+    // 与 m_totalSize / m_threadCount 的其他写入路径不并发，不需要 m_mutex。
     m_totalSize = m_headReply->header(QNetworkRequest::ContentLengthHeader).toLongLong();
     LOGD(QString("文件大小:%1 字节").arg(m_totalSize));
-    
+
     if (m_totalSize <= 0) {
         LOGD("无法获取内容长度，强制使用单线程下载");
         m_threadCount = 1;
@@ -531,12 +547,12 @@ void DownloadTask::processHeadResponse()
 
     bool acceptRanges = m_headReply->rawHeader("Accept-Ranges") == "bytes";
     LOGD(QString("服务器支持Range请求:%1").arg(acceptRanges ? "是" : "否"));
-    
+
     if (!acceptRanges && m_threadCount > 1) {
         LOGD("服务器不支持Range请求，强制使用单线程下载");
         m_threadCount = 1;
     }
-    
+
     LOGD(QString("最终线程数:%1").arg(m_threadCount));
 }
 
@@ -544,22 +560,28 @@ void DownloadTask::onHeadRequestFinished()
 {
     LOGD("HEAD请求完成，检查响应...");
 
+    // 用 QPointer 保护 this，避免在槽内访问已被 deleteLater 的对象
+    QPointer<DownloadTask> safeThis(this);
+    if (!safeThis) {
+        return;
+    }
+
     if (m_headRequestTimedOut.loadAcquire()) {
         LOGD("HEAD请求已超时，忽略此回调");
         return;
     }
-    
+
     // 检查是否已经处理过错误（避免重复处理）
     if (m_status == DownloadTaskStatus::Failed) {
         LOGD("HEAD请求错误已处理，忽略此回调");
         return;
     }
-    
+
     if (m_headReply->error() != QNetworkReply::NoError) {
         handleHeadRequestError(m_headReply->errorString());
         return;
     }
-    
+
     LOGD("HEAD请求成功，开始解析响应头...");
     processHeadResponse();
 
@@ -570,8 +592,7 @@ void DownloadTask::onHeadRequestFinished()
     m_headManager = nullptr;
 
     LOGD("开始创建HttpWorkers...");
-    QPointer<DownloadTask> safeThis(this);
-    QTimer::singleShot(0, this, [safeThis]() {
+    QTimer::singleShot(0, safeThis, [safeThis]() {
         if (safeThis) {
             LOGD("异步创建HttpWorkers...");
             safeThis->createHttpWorkers();
@@ -579,13 +600,19 @@ void DownloadTask::onHeadRequestFinished()
             LOGD("HttpWorkers创建完成，速度计算定时器已启动");
         }
     });
-    
+
     LOGD("HEAD请求处理完成");
 }
 
 void DownloadTask::onHeadRequestError(QNetworkReply::NetworkError code)
 {
     Q_UNUSED(code);
+
+    // 用 QPointer 保护 this，避免在槽内访问已被 deleteLater 的对象
+    QPointer<DownloadTask> safeThis(this);
+    if (!safeThis) {
+        return;
+    }
     
     // 检查请求是否已超时
     if (m_headRequestTimedOut.loadAcquire()) {
@@ -667,6 +694,18 @@ void DownloadTask::createHttpWorkers()
 
     LOGD(QString("使用多线程下载模式，文件大小:%1").arg(m_totalSize));
 
+    // 把线程数限制在合理区间 [1, 16]。INT_MAX 会让 chunkSize 计算溢出
+    // 或创建数千个 worker 把磁盘/线程池打爆。
+    constexpr int kMaxThreadCount = 16;
+    if (m_threadCount > kMaxThreadCount) {
+        LOGD(QString("线程数(%1)超过上限%2，截断").arg(m_threadCount).arg(kMaxThreadCount));
+        m_threadCount = kMaxThreadCount;
+    }
+    if (m_threadCount < 1) {
+        LOGD(QString("线程数(%1)无效，修正为1").arg(m_threadCount));
+        m_threadCount = 1;
+    }
+
     // 防止 m_totalSize < m_threadCount 导致 chunkSize=0：
     // 实际并发数不超过文件总字节数（至少 1 字节/线程），多余的 worker 就不再创建
     const int effectiveThreadCount = qMin(m_threadCount, static_cast<int>(qMax<qint64>(1, m_totalSize)));
@@ -676,16 +715,18 @@ void DownloadTask::createHttpWorkers()
         m_threadCount = effectiveThreadCount;
     }
 
-    qint64 chunkSize = m_totalSize / m_threadCount;
-    // 向上取整修正：避免最后一个分片把前面 chunkSize 截 0
-    if (chunkSize <= 0) {
-        chunkSize = 1;
-    }
+    const qint64 chunkSize = m_totalSize / m_threadCount;
+    const qint64 leftover = m_totalSize % m_threadCount; // 余数字节，分散到前 leftover 个 worker
     QString baseFileName = QFileInfo(m_filePath).fileName();
 
     for (int i = 0; i < m_threadCount; ++i) {
-        qint64 startPoint = i * chunkSize;
+        // 把余数字节按 1 byte/worker 均匀分散给前 leftover 个 worker
+        const qint64 extra = (i < leftover) ? 1 : 0;
+        const qint64 startPoint = i * chunkSize + extra;
         qint64 endPoint = (i == m_threadCount - 1) ? (m_totalSize - 1) : (startPoint + chunkSize - 1);
+        if (endPoint >= m_totalSize) {
+            endPoint = m_totalSize - 1;
+        }
         QString tempFileName = baseFileName + QString(".part%1").arg(i);
         QString tempFilePath = QDir(m_tempDirectory).filePath(tempFileName);
 
@@ -708,20 +749,31 @@ void DownloadTask::createHttpWorkers()
 
 void DownloadTask::onWorkerProgress(qint64 bytes)
 {
+    // 防止合并/取消/失败之后还有迟到 onWorkerProgress 信号
+    // 把 m_downloadedSize 推回小于 totalSize 的值，进而误导 UI 显示未完成
+    {
+        QMutexLocker statusLocker(&m_statusMutex);
+        if (m_status == DownloadTaskStatus::Completed ||
+            m_status == DownloadTaskStatus::Failed ||
+            m_status == DownloadTaskStatus::Cancelled) {
+            return;
+        }
+    }
+
     qint64 downloadedSize;
     qint64 totalSize;
     qint64 downloadSpeed;
-    
+
     {
         QMutexLocker locker(&m_mutex); // 保护m_downloadedSize和m_lastDownloadedSize
         m_downloadedSize += bytes;
-        
+
         // Copy values to local variables before releasing the mutex
         downloadedSize = m_downloadedSize;
         totalSize = m_totalSize;
         downloadSpeed = m_downloadSpeed;
     }
-    
+
     // Emit signal outside of mutex lock to avoid potential deadlocks
     emit progressUpdated(downloadedSize, totalSize, downloadSpeed);
 }
@@ -795,10 +847,8 @@ void DownloadTask::onWorkerError(const QString& errorString)
         QMutexLocker statusLocker(&m_statusMutex); // 统一用m_statusMutex保护m_status
         if (m_status != DownloadTaskStatus::Failed && m_status != DownloadTaskStatus::Cancelled) {
             LOGD(QString("worker出错，错误信息:%1").arg(errorString));
-            // 标记为Failed，保存历史
-            if (m_status != DownloadTaskStatus::Failed) {
-                m_status = DownloadTaskStatus::Failed; // 在statusMutex内直接赋值避免与setStatus异步排队冲突
-            }
+            // 走 setStatus() 以确保 statusChanged 信号被发射
+            setStatus(DownloadTaskStatus::Failed);
             m_speedCalculationTimer.stop();
             m_finishTime = QDateTime::currentDateTime();
             saveToHistory("Failed");
@@ -834,17 +884,20 @@ void DownloadTask::onSpeedCalculationTimerTimeout()
 {
     qint64 downloadedSize;
     qint64 downloadSpeed;
-    
+
     {
         QMutexLocker locker(&m_mutex); // 保护m_downloadedSize和m_lastDownloadedSize
-        m_downloadSpeed = m_downloadedSize - m_lastDownloadedSize;
+        // 合并完成后 m_downloadedSize 可能被回写为 totalSize，
+        // 再减去旧值会得到负数；clamp 到 0 避免 UI 显示负速度。
+        const qint64 delta = m_downloadedSize - m_lastDownloadedSize;
+        m_downloadSpeed = delta > 0 ? delta : 0;
         m_lastDownloadedSize = m_downloadedSize;
-        
+
         // Copy values to local variables before releasing the mutex
         downloadedSize = m_downloadedSize;
         downloadSpeed = m_downloadSpeed;
     }
-    
+
     // Emit signal outside of mutex lock to avoid potential deadlocks
     emit progressUpdated(downloadedSize, m_totalSize, downloadSpeed);
 }
@@ -1114,9 +1167,11 @@ bool DownloadTask::moveFileToFinalLocation(const QString& tempFilePath, const QS
         }
     }
     
-    // 如果目标文件已存在，先删除它
-    if (QFile::exists(finalFilePath)) {
-        if (!QFile::remove(finalFilePath)) {
+    // 如果目标文件已存在，先删除它（TOCTOU：直接 remove 即可，存在则删、不存在则静默 no-op）
+    if (!QFile::remove(finalFilePath)) {
+        // 如果文件不存在，QFile::remove 返回 false 但不视为错误；区分"不存在"和"删除失败"
+        QFileInfo fi(finalFilePath);
+        if (fi.exists()) {
             LOGD(QString("无法删除已存在的目标文件:%1").arg(finalFilePath));
             return false;
         }
