@@ -1,6 +1,15 @@
 #include "downloadmanager.h"
 #include "logger.h"
 #include <QDebug>
+#include <QPointer>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QMetaObject>
+
+namespace {
+    // 保护 m_tasks 的并发访问（task 创建/移除可能跨线程触发）
+    QMutex g_tasksMutex;
+}
 
 /**
  * @brief 下载管理器构造函数
@@ -40,12 +49,20 @@ DownloadManager::~DownloadManager()
         LOGD("线程池中的任务已全部完成");
     }
 
-    // 清理所有 task 的信号连接，避免 deleteLater 之后还有回调触发
-    for (DownloadTask* task : m_tasks) {
-        if (task) {
-            task->disconnect(); // 断开 task 的所有信号
-            task->blockSignals(true);
+    // 用 QPointer 复制当前任务列表并加锁访问，避免其他线程并发修改 m_tasks 时 UAF；
+    // 删除前显式 disconnect + blockSignals 防止回调触发到正在销毁的对象上。
+    QList<QPointer<DownloadTask>> snapshot;
+    {
+        QMutexLocker locker(&g_tasksMutex);
+        for (DownloadTask* task : m_tasks) {
+            snapshot.append(QPointer<DownloadTask>(task));
         }
+    }
+    for (const QPointer<DownloadTask>& p : snapshot) {
+        DownloadTask* task = p.data();
+        if (!task) continue; // 已被其他路径 deleteLater 掉
+        task->disconnect();   // 断开所有信号
+        task->blockSignals(true);
     }
 
     // QThreadPool的父对象是DownloadManager，会自动删除
@@ -84,10 +101,13 @@ DownloadTask* DownloadManager::createTask(const QUrl& url, const QString& savePa
     
     m_tasks.append(task);
     LOGD(QString("任务已添加到任务列表，总任务数:%1").arg(m_tasks.size()));
-    
+
     LOGD("开始连接任务信号...");
-    connect(task, &DownloadTask::finished, this, &DownloadManager::onTaskFinished);
-    connect(task, &DownloadTask::error, this, &DownloadManager::onTaskError);
+    // 使用 QueuedConnection 强制跨线程安全派发；
+    // DownloadTask 的 finished/error 可能在子线程触发，但 DownloadManager 可能在主线程
+    // （取决于线程亲和性），用 QueuedConnection 可以避免跨线程直接派发到正在析构的对象。
+    connect(task, &DownloadTask::finished, this, &DownloadManager::onTaskFinished, Qt::QueuedConnection);
+    connect(task, &DownloadTask::error, this, &DownloadManager::onTaskError, Qt::QueuedConnection);
     LOGD("任务信号连接完成");
     
     LOGD("准备发射taskAdded信号...");
@@ -155,52 +175,64 @@ QThreadPool* DownloadManager::threadPool() const
 void DownloadManager::onTaskFinished()
 {
     LOGD("接收到任务完成信号");
-    
-    DownloadTask* task = qobject_cast<DownloadTask*>(sender());
-    if (task) {
+
+    // sender() 可能在 task deleteLater 之后返回悬空指针；用 QPointer 保护
+    DownloadTask* raw = qobject_cast<DownloadTask*>(sender());
+    QPointer<DownloadTask> safeTask(raw);
+    if (safeTask) {
+        DownloadTask* task = safeTask.data();
         LOGD(QString("任务有效，文件名:%1 状态:%2").arg(task->fileName()).arg(static_cast<int>(task->status())));
-        
+
         LOGD("发射taskFinished信号...");
         emit taskFinished(task);
         LOGD("taskFinished信号已发射");
-        
+
         LOGD("从任务列表中移除任务...");
-        m_tasks.removeOne(task);
+        {
+            QMutexLocker locker(&g_tasksMutex);
+            m_tasks.removeOne(task);
+        }
         LOGD(QString("任务已从列表中移除，剩余任务数:%1").arg(m_tasks.size()));
-        
+
         LOGD("标记任务为延迟删除...");
         task->deleteLater(); // 任务完成后安全删除
         LOGD("任务已标记为延迟删除");
     } else {
-        LOGD("sender不是有效的DownloadTask对象");
+        LOGD("sender不是有效的DownloadTask对象（可能已被 deleteLater）");
     }
-    
+
     LOGD("onTaskFinished处理完成");
 }
 
 void DownloadManager::onTaskError(const QString& errorString)
 {
     LOGD(QString("接收到任务错误信号，错误信息:%1").arg(errorString));
-    
-    DownloadTask* task = qobject_cast<DownloadTask*>(sender());
-    if (task) {
+
+    // 用 QPointer 防止 sender() 返回已销毁的对象
+    DownloadTask* raw = qobject_cast<DownloadTask*>(sender());
+    QPointer<DownloadTask> safeTask(raw);
+    if (safeTask) {
+        DownloadTask* task = safeTask.data();
         LOGD(QString("任务有效，文件名:%1").arg(task->fileName()));
-        
+
         LOGD("发射taskError信号...");
         emit taskError(task, errorString);
         LOGD("taskError信号已发射");
-        
+
         // 错误发生后，任务也算"完成"，从列表中移除
         LOGD("从任务列表中移除错误任务...");
-        m_tasks.removeOne(task);
+        {
+            QMutexLocker locker(&g_tasksMutex);
+            m_tasks.removeOne(task);
+        }
         LOGD(QString("错误任务已从列表中移除，剩余任务数:%1").arg(m_tasks.size()));
-        
+
         LOGD("标记错误任务为延迟删除...");
         task->deleteLater();
         LOGD("错误任务已标记为延迟删除");
     } else {
-        LOGD("sender不是有效的DownloadTask对象");
+        LOGD("sender不是有效的DownloadTask对象（可能已被 deleteLater）");
     }
-    
+
     LOGD("onTaskError处理完成");
 }

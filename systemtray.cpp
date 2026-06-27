@@ -1,5 +1,7 @@
 #include "systemtray.h"
 #include "logger.h"
+#include <QPointer>
+#include <QTimer>
 
 /**
  * @brief 系统托盘构造函数
@@ -55,21 +57,24 @@ SystemTray::SystemTray(QMainWindow* mainWindow, QObject *parent)
     m_trayIcon->setIcon(icon);
     m_trayIcon->setToolTip(tr("Downloader"));
 
-    // 创建菜单
-    m_trayMenu = new QMenu();
+    // 创建菜单（parent 设为 mainWindow，避免 leak 并跟随主窗口生命周期一起释放）
+    // QMenu 的 parent 必须是 QWidget，因此用 m_mainWindow。
+    m_trayMenu = new QMenu(m_mainWindow);
     createActions();
 
     // 连接信号和槽
     connect(m_trayIcon, &QSystemTrayIcon::activated, this, &SystemTray::onIconActivated);
-    
+
     // 设置托盘图标菜单
     m_trayIcon->setContextMenu(m_trayMenu);
 }
 
 SystemTray::~SystemTray()
 {
-    // m_trayIcon, m_trayMenu, m_showAction, m_quitAction 都是 SystemTray 的子对象，
-    // 会在 SystemTray 析构时自动删除，无需手动 delete
+    // m_trayIcon、m_showAction、m_quitAction 都是 SystemTray 的子对象，
+    // 会在 SystemTray 析构时自动删除。
+    // m_trayMenu 现在 parent 是 m_mainWindow，会跟随主窗口一起释放，无需手动 delete。
+    m_trayMenu = nullptr;
 }
 
 /**
@@ -154,11 +159,22 @@ void SystemTray::onIconActivated(QSystemTrayIcon::ActivationReason reason)
  */
 void SystemTray::onShowMainWindow()
 {
-    if (m_mainWindow) {
-        m_mainWindow->showNormal();
-        m_mainWindow->raise();
-        m_mainWindow->activateWindow();
+    if (!m_mainWindow) {
+        return;
     }
+    // 在某些平台（尤其 Windows + 已隐藏窗口），连续调用 showNormal()/raise()/activateWindow()
+    // 会与系统事件循环产生竞争导致窗口不显示或闪烁。改为延迟到事件循环下一次迭代执行，
+    // 让窗口的当前状态先稳定下来再显示。
+    QTimer::singleShot(0, this, [mainWindow = QPointer<QMainWindow>(m_mainWindow)]() {
+        if (!mainWindow) return;
+        if (mainWindow->isMinimized()) {
+            mainWindow->showNormal();
+        } else {
+            mainWindow->show();
+        }
+        mainWindow->raise();
+        mainWindow->activateWindow();
+    });
 }
 
 /**
