@@ -18,6 +18,7 @@
 #include <QStyledItemDelegate>
 #include <QPainter>
 #include <QApplication>
+#include <QTranslator>
 #include "downloadmanager.h"
 #include "systemtray.h"
 #include "settingsmanager.h"
@@ -40,6 +41,12 @@ class MainWindow : public QMainWindow
 public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
+
+    /**
+     * @brief 请求程序真正退出（设置 m_quitting 标志并退出事件循环）。
+     * 供系统托盘等组件调用，避免被 closeEvent 当作最小化到托盘处理。
+     */
+    Q_INVOKABLE void requestQuit();
 
 public slots:
     /**
@@ -202,6 +209,13 @@ private:
     QTimer* m_uiUpdateTimer;            ///< UI更新定时器，用于节流频繁的UI更新
     QSet<DownloadTask*> m_tasksToUpdate;///< 待更新UI的任务集合，用于批量更新任务状态
     QPointer<QProgressDialog> m_pauseProgress; ///< 暂停操作进度对话框，显示批量暂停进度
+    QTranslator* m_translator;          ///< 翻译器实例指针（QTranslator 禁用了拷贝/移动赋值，必须用指针）
+    QString m_currentLanguage;          ///< 当前界面语言代码（"zh_CN"/"en_US"）
+    bool m_quitting = false;            ///< 是否正在退出程序，用于区分最小化到托盘和真正退出
+    int m_uiIdleTicks = 0;              ///< UI更新定时器空闲计数，连续多次无任务时停止定时器
+
+    // 新建任务后启动延迟：避免同步阻塞 UI
+    static constexpr int kTaskStartDelayMs = 100;
 
     /**
      * @brief 初始化UI界面。

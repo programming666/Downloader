@@ -1,6 +1,7 @@
 #include "settingsdialog.h"
 #include "ui_settingsdialog.h"
 #include "settingsmanager.h"
+#include "mainwindow.h" // 用于实时预览主题（MainWindow::loadStyleSheet）
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDir>
@@ -16,7 +17,8 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     ui->proxyTypeComboBox->addItem(tr("不使用代理"), QNetworkProxy::NoProxy);
     ui->proxyTypeComboBox->addItem(tr("HTTP代理"), QNetworkProxy::HttpProxy);
     ui->proxyTypeComboBox->addItem(tr("SOCKS5代理"), QNetworkProxy::Socks5Proxy);
-    // TODO: 添加系统代理选项
+    // 系统代理：SettingsManager 用 3 表示，跟随系统设置
+    ui->proxyTypeComboBox->addItem(tr("系统代理"), QVariant::fromValue<int>(3));
 
     // 初始化主题选择
     ui->themeComboBox->addItem(tr("浅色模式"), "light");
@@ -124,8 +126,9 @@ void SettingsDialog::on_browseButton_clicked()
 
 void SettingsDialog::on_proxyTypeComboBox_currentIndexChanged(int index)
 {
-    QNetworkProxy::ProxyType type = static_cast<QNetworkProxy::ProxyType>(ui->proxyTypeComboBox->itemData(index).toInt());
-    bool enableProxyFields = (type != QNetworkProxy::NoProxy); // 移除 SystemProxy 检查
+    int typeValue = ui->proxyTypeComboBox->itemData(index).toInt();
+    // 不使用代理（0）和系统代理（3）都不需要 host/port 输入
+    bool enableProxyFields = (typeValue != QNetworkProxy::NoProxy) && (typeValue != 3);
 
     ui->proxyHostLineEdit->setEnabled(enableProxyFields);
     ui->proxyPortSpinBox->setEnabled(enableProxyFields);
@@ -141,4 +144,11 @@ void SettingsDialog::on_applyButton_clicked()
 void SettingsDialog::on_cancelButton_clicked()
 {
     reject(); // 关闭对话框，不保存更改
+}
+
+void SettingsDialog::accept()
+{
+    // 点击OK时也保存设置，避免只点Apply或OK导致数据丢失
+    saveSettingsFromUi();
+    QDialog::accept();
 }

@@ -12,6 +12,8 @@
 #include <QTimer>
 #include <QMutex>
 #include <QEventLoop>
+#include <QThreadPool>
+#include <QAtomicInt>
 #include "httpworker.h"
 //#include "historymanager.h" // 包含历史管理器头文件
 
@@ -171,11 +173,6 @@ private slots:
     void onWorkerError(const QString& errorString);
 
     /**
-     * @brief 处理HttpWorker下载完成的信号。
-     */
-    void onWorkerDownloadFinished();
-
-    /**
      * @brief 定时器槽函数，用于计算下载速度和更新UI。
      */
     void onSpeedCalculationTimerTimeout();
@@ -292,6 +289,7 @@ private:
     QString m_fileName;                 ///< 文件名。
     QString m_tempDirectory;            ///< 临时文件存储目录。
     int m_threadCount;                  ///< 下载线程数。
+    QThreadPool* m_threadPool;          ///< 线程池指针（来自DownloadManager，不使用globalInstance）。
     DownloadTaskStatus m_status;        ///< 当前任务状态。
 
     qint64 m_totalSize;                 ///< 文件总大小。
@@ -310,7 +308,8 @@ private:
     mutable QMutex m_mutex;                     ///< 用于保护worker列表等数据的互斥锁
     mutable QMutex m_statusMutex;               ///< 专门保护状态变量的互斥锁
     mutable QMutex m_historyMutex;              ///< 专门保护历史记录操作的互斥锁
-    bool m_headRequestTimedOut{false};  ///< 标记HEAD请求是否已超时。
+    QAtomicInt m_headRequestTimedOut{0};  ///< 标记HEAD请求是否已超时（原子，多超时回调并发安全）。
+    bool m_alreadyFinished{false};      ///< 标记finished信号是否已发射，避免重复发射。
 };
 
 #endif // DOWNLOADTASK_H

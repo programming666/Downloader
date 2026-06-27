@@ -32,6 +32,7 @@ DownloadTask::DownloadTask(const QUrl& url, const QString& savePath, int threadC
       m_url(url),
       m_filePath(savePath),
       m_threadCount(threadCount),
+      m_threadPool(DownloadManager::instance().threadPool()),
       m_status(DownloadTaskStatus::Pending),
       m_totalSize(0),
       m_downloadedSize(0),
@@ -41,7 +42,13 @@ DownloadTask::DownloadTask(const QUrl& url, const QString& savePath, int threadC
       m_headReply(nullptr),
       m_finishedWorkers(0)
 {
-    LOGD(QString("开始构造DownloadTask - URL:%1 保存路径:%2 线程数:%3").arg(url.toString()).arg(savePath).arg(threadCount));
+    // 防止 m_threadCount <= 0 导致后续除零；至少给1个线程
+    if (m_threadCount <= 0) {
+        LOGD(QString("构造时线程数异常(%1)，修正为1").arg(threadCount));
+        m_threadCount = 1;
+    }
+
+    LOGD(QString("开始构造DownloadTask - URL:%1 保存路径:%2 线程数:%3").arg(url.toString()).arg(savePath).arg(m_threadCount));
     
     // 简化构造函数，只做基本初始化
     QFileInfo fileInfo(m_filePath);
@@ -63,11 +70,24 @@ DownloadTask::DownloadTask(const QUrl& url, const QString& savePath, int threadC
 DownloadTask::~DownloadTask()
 {
     LOGD(QString("开始析构DownloadTask - 文件名:%1").arg(m_fileName));
-    
+
+    // 先断开所有信号连接，避免在清理过程中再有信号发出触发外部槽函数
+    // 注意：不能用 blockSignals(true)，因为 setStatus 内部的 emit 是通过
+    // QTimer::singleShot(0, ...) 异步排队，blockSignals 会把已排队的 emit 也屏蔽掉
+    this->disconnect();
+
     // 停止所有worker
     LOGD(QString("停止所有worker，当前worker数量:%1").arg(m_workers.size()));
     for (HttpWorker* worker : m_workers) {
-        worker->stop();
+        if (worker) {
+            worker->stop();
+        }
+    }
+
+    // 等待线程池中的worker全部结束，避免析构时还有线程在跑
+    LOGD("等待线程池中任务结束...");
+    if (m_threadPool) {
+        m_threadPool->waitForDone(3000);
     }
 
     // 清理网络资源
@@ -84,10 +104,12 @@ DownloadTask::~DownloadTask()
     // 使用deleteLater异步删除worker，避免阻塞
     LOGD("标记所有worker为延迟删除");
     for (HttpWorker* worker : m_workers) {
-        worker->deleteLater();
+        if (worker) {
+            worker->deleteLater();
+        }
     }
     m_workers.clear();
-    
+
     LOGD("DownloadTask析构完成");
 }
 
@@ -105,57 +127,57 @@ void DownloadTask::start()
 {
     LOGD(QString("开始启动任务 - 当前状态:%1 URL:%2").arg(static_cast<int>(m_status)).arg(m_url.toString()));
 
-    QMutexLocker locker(&m_mutex); // 保护m_status和m_workers
-    if (m_status == DownloadTaskStatus::Pending || m_status == DownloadTaskStatus::Failed) {
-        LOGD("任务状态为Pending/Failed，清理旧worker并重新初始化下载");
-        LOGD(QString("当前workers数量: %1").arg(m_workers.size()));
-        
-        // 清理之前的worker
-        for (HttpWorker* worker : m_workers) {
-            if (worker) {
-                LOGD("停止并删除worker");
-                worker->stop();
-                worker->deleteLater();
-            } else {
-                LOGD("发现空worker指针");
-            }
+    bool needInit = false;
+    bool needResume = false;
+
+    {
+        QMutexLocker locker(&m_statusMutex); // 统一使用m_statusMutex保护m_status
+        if (m_status == DownloadTaskStatus::Pending || m_status == DownloadTaskStatus::Failed) {
+            LOGD("任务状态为Pending/Failed，清理旧worker并重新初始化下载");
+            needInit = true;
+        } else if (m_status == DownloadTaskStatus::Paused) {
+            LOGD("任务状态为Paused，调用resume()");
+            needResume = true;
+        } else {
+            LOGD(QString("任务状态不是Pending/Failed/Paused，不执行任何操作，状态:%1").arg(static_cast<int>(m_status)));
         }
-        m_workers.clear();
-        m_finishedWorkers = 0;
-        LOGD("worker清理完成");
-        
-        // 直接设置状态，避免在已有锁的情况下再次加锁
-        LOGD(QString("任务状态变更：%1 -> %2").arg(static_cast<int>(m_status)).arg(static_cast<int>(DownloadTaskStatus::Downloading)));
-        m_status = DownloadTaskStatus::Downloading;
+    }
+
+    if (needInit) {
+        QList<HttpWorker*> oldWorkers;
+        {
+            QMutexLocker workerLocker(&m_mutex); // 保护m_workers
+            LOGD(QString("当前workers数量: %1").arg(m_workers.size()));
+
+            // 清理之前的worker
+            for (HttpWorker* worker : m_workers) {
+                if (worker) {
+                    LOGD("停止并删除worker");
+                    worker->stop();
+                    worker->deleteLater();
+                } else {
+                    LOGD("发现空worker指针");
+                }
+            }
+            m_workers.clear();
+            m_finishedWorkers = 0;
+            LOGD("worker清理完成");
+        }
+
         m_startTime = QDateTime::currentDateTime();
+        setStatus(DownloadTaskStatus::Downloading); // 走setStatus，自动用m_statusMutex
         LOGD(QString("任务状态设置为Downloading，开始时间:%1").arg(m_startTime.toString()));
-        
-        // 使用异步调用避免阻塞主线程
-        locker.unlock();
-        
+
         // 使用QPointer安全包装this指针
         QPointer<DownloadTask> safeThis(this);
-        
-        // 异步发射状态变更信号
-        QTimer::singleShot(0, this, [safeThis]() {
-            if (safeThis) {
-                LOGD("异步发射statusChanged信号");
-                emit safeThis->statusChanged(DownloadTaskStatus::Downloading);
-            }
-        });
-        LOGD("开始异步调用initializeDownload()");
         QTimer::singleShot(0, this, [safeThis]() {
             if (safeThis) {
                 LOGD("异步执行initializeDownload()");
                 safeThis->initializeDownload();
             }
         });
-    } else if (m_status == DownloadTaskStatus::Paused) {
-        LOGD("任务状态为Paused，调用resume()");
-        locker.unlock();
+    } else if (needResume) {
         resume();
-    } else {
-        LOGD(QString("任务状态不是Pending/Failed/Paused，不执行任何操作，状态:%1").arg(static_cast<int>(m_status)));
     }
 
     LOGD("任务启动完成");
@@ -176,10 +198,11 @@ void DownloadTask::pause()
     LOGD("开始暂停任务");
     QList<HttpWorker*> workersToStop;
     bool shouldStop = false;
-    
+
     // 先获取worker锁
     {
         QMutexLocker workerLocker(&m_mutex);
+        QMutexLocker statusLocker(&m_statusMutex);
         if (m_status == DownloadTaskStatus::Downloading) {
             LOGD("任务正在下载中，准备暂停");
             workersToStop = m_workers;
@@ -188,13 +211,13 @@ void DownloadTask::pause()
             LOGD("已复制worker列表并停止定时器");
         }
     }
-    
+
     // 在worker锁外处理状态变更和停止操作
     if (shouldStop) {
         setStatus(DownloadTaskStatus::Paused); // 内部使用statusMutex
         LOGD("任务状态设置为Paused");
-        
-        // 异步停止workers
+
+        // 异步停止workers（在事件循环回到主线程时真正执行stop）
         for (HttpWorker* worker : workersToStop) {
             if (worker) {
                 LOGD("异步停止worker");
@@ -204,21 +227,6 @@ void DownloadTask::pause()
         LOGD(QString("任务暂停完成 - URL:%1").arg(url()));
     } else {
         LOGD(QString("任务不在下载状态，无法暂停"));
-    }
-    LOGD("暂停操作完成，开始停止workers");
-    // 在互斥锁外直接停止workers，避免事件循环依赖
-    if (shouldStop) {
-        LOGD("开始停止workers");
-        
-        // 使用异步停止避免在主线程中阻塞
-        for (HttpWorker* worker : workersToStop) {
-            if (worker) {
-                LOGD("异步停止worker");
-                worker->stopAsync(); // 使用异步停止方法
-            }
-        }
-        
-        LOGD(QString("任务暂停完成 - URL:%1").arg(url()));
     }
 }
 
@@ -237,27 +245,37 @@ void DownloadTask::resume()
     LOGD("开始恢复任务");
     QList<HttpWorker*> workersToResume;
     bool shouldResume = false;
-    
+
     // 1. 获取worker列表
     {
         QMutexLocker workerLocker(&m_mutex);
+        QMutexLocker statusLocker(&m_statusMutex);
         if (m_status == DownloadTaskStatus::Paused) {
             LOGD("任务已暂停，准备恢复");
             workersToResume = m_workers;
             shouldResume = true;
         }
     }
-    
+
     // 2. 在锁外处理状态和worker提交
     if (shouldResume) {
+        // 重置每个worker的运行状态。pause时worker.m_isStopped被置true，若不重置
+        // worker.run()会直接return，导致断点续传失效
+        LOGD(QString("重置%1个worker状态").arg(workersToResume.size()));
+        for (HttpWorker* worker : workersToResume) {
+            if (worker) {
+                worker->reset();
+            }
+        }
+
         setStatus(DownloadTaskStatus::Downloading); // 使用statusMutex
         m_speedCalculationTimer.start();
-        
+
         LOGD(QString("重新提交%1个worker到线程池").arg(workersToResume.size()));
         for (HttpWorker* worker : workersToResume) {
-            QThreadPool::globalInstance()->start(worker);
+            m_threadPool->start(worker);
         }
-        
+
         LOGD(QString("任务恢复完成 - URL:%1").arg(m_url.toString()));
     } else {
         LOGD(QString("任务不在暂停状态，无法恢复"));
@@ -282,12 +300,13 @@ void DownloadTask::cancel(bool deleteTempFiles)
     LOGD(QString("开始取消任务，删除临时文件:%1").arg(deleteTempFiles));
     QList<HttpWorker*> workersToStop;
     bool shouldCancel = false;
-    
+
     // 1. 检查状态并获取worker列表
     {
-        QMutexLocker locker(&m_mutex);
-        if (m_status != DownloadTaskStatus::Completed && 
-            m_status != DownloadTaskStatus::Cancelled && 
+        QMutexLocker statusLocker(&m_statusMutex);
+        QMutexLocker workerLocker(&m_mutex);
+        if (m_status != DownloadTaskStatus::Completed &&
+            m_status != DownloadTaskStatus::Cancelled &&
             m_status != DownloadTaskStatus::Failed) {
             workersToStop = m_workers;
             shouldCancel = true;
@@ -295,7 +314,7 @@ void DownloadTask::cancel(bool deleteTempFiles)
             m_finishTime = QDateTime::currentDateTime();
         }
     }
-    
+
     // 2. 在锁外执行取消操作
     if (shouldCancel) {
         // 停止所有worker
@@ -303,20 +322,30 @@ void DownloadTask::cancel(bool deleteTempFiles)
         for (HttpWorker* worker : workersToStop) {
             worker->stop();
         }
-        
+
         // 状态变更
         setStatus(DownloadTaskStatus::Cancelled);
         LOGD(QString("任务状态设置为Cancelled，结束时间:%1").arg(m_finishTime.toString()));
-        
+
+        // 等待线程池中正在跑 run() 的 worker 真正退出，避免后续 deleteTempFiles 时
+        // 仍有 worker 在写临时分片文件导致文件锁/句柄竞态
+        LOGD("cancel: 等待线程池worker退出（超时3秒）");
+        if (m_threadPool) {
+            m_threadPool->waitForDone(3000);
+        }
+
         // 耗时操作放在最后
         if (deleteTempFiles) {
             LOGD("删除临时文件");
             this->deleteTempFiles();
         }
-        
+
         // 记录历史
         saveToHistory("Cancelled");
-        emit finished();
+        if (!m_alreadyFinished) {
+            m_alreadyFinished = true;
+            emit finished();
+        }
         LOGD(QString("任务取消完成 - URL:%1").arg(m_url.toString()));
     } else {
         LOGD("任务已完成或已取消，无需操作");
@@ -400,7 +429,10 @@ void DownloadTask::initializeDownload()
             setStatus(DownloadTaskStatus::Failed);
             emit error(tr("无法创建下载目录: %1").arg(dir.path()));
             saveToHistory("Failed");
-            emit finished();
+            if (!m_alreadyFinished) {
+                m_alreadyFinished = true;
+                emit finished();
+            }
             return;
         }
         LOGD("目录创建成功");
@@ -441,8 +473,8 @@ void DownloadTask::initializeDownload()
         if (safeThis && safeHeadReply && !safeHeadReply->isFinished()) {
             LOGD("HEAD请求超时，强制中止");
             safeHeadReply->abort();
-            // 标记超时状态避免后续处理
-            safeThis->m_headRequestTimedOut = true;
+            // 标记超时状态避免后续处理（原子操作，防止多超时回调并发写）
+            safeThis->m_headRequestTimedOut.storeRelease(1);
             
             // 超时后立即处理错误，避免等待其他回调
             QTimer::singleShot(100, safeThis, [safeThis]() {
@@ -480,7 +512,10 @@ void DownloadTask::handleHeadRequestError(const QString& errorString)
     emit error(tr("HEAD请求失败: %1").arg(errorString));
     setStatus(DownloadTaskStatus::Failed);
     saveToHistory("Failed");
-    emit finished();
+    if (!m_alreadyFinished) {
+        m_alreadyFinished = true;
+        emit finished();
+    }
 }
 
 void DownloadTask::processHeadResponse()
@@ -508,8 +543,8 @@ void DownloadTask::processHeadResponse()
 void DownloadTask::onHeadRequestFinished()
 {
     LOGD("HEAD请求完成，检查响应...");
-    
-    if (m_headRequestTimedOut) {
+
+    if (m_headRequestTimedOut.loadAcquire()) {
         LOGD("HEAD请求已超时，忽略此回调");
         return;
     }
@@ -553,7 +588,7 @@ void DownloadTask::onHeadRequestError(QNetworkReply::NetworkError code)
     Q_UNUSED(code);
     
     // 检查请求是否已超时
-    if (m_headRequestTimedOut) {
+    if (m_headRequestTimedOut.loadAcquire()) {
         LOGD("HEAD请求已超时，忽略此错误回调");
         return;
     }
@@ -590,44 +625,72 @@ void DownloadTask::onHeadRequestError(QNetworkReply::NetworkError code)
     emit error(tr("HEAD请求错误: %1").arg(errorString));
     setStatus(DownloadTaskStatus::Failed);
     saveToHistory("Failed");
-    emit finished();
+    if (!m_alreadyFinished) {
+        m_alreadyFinished = true;
+        emit finished();
+    }
 }
 
 void DownloadTask::createHttpWorkers()
 {
     LOGD(QString("开始创建%1个HttpWorkers...").arg(m_threadCount));
-    
+
     QMutexLocker locker(&m_mutex); // 保护m_workers
+
+    // 防御性检查：m_threadCount 不能为 0，避免除零
+    if (m_threadCount <= 0) {
+        LOGD("线程数异常，强制为1");
+        m_threadCount = 1;
+    }
+
+    // m_totalSize <= 0 时走单线程分支（不使用 Range）
     if (m_totalSize <= 0 || m_threadCount == 1) {
         // 单线程下载
         LOGD("使用单线程下载模式");
         QString tempFileName = QFileInfo(m_filePath).fileName() + ".part0";
         QString tempFilePath = QDir(m_tempDirectory).filePath(tempFileName);
-        LOGD(QString("创建单线程worker，临时文件:%1").arg(tempFilePath));
-        HttpWorker* worker = new HttpWorker(m_url, tempFilePath, 0, m_totalSize - 1);
+        // 当 m_totalSize 未知时，endPoint 设为 -1 作为哨兵值，HttpWorker 检测到后
+        // 不发送 Range 头，直接读完整文件直到服务器结束
+        qint64 endPoint = (m_totalSize > 0) ? (m_totalSize - 1) : -1;
+        LOGD(QString("创建单线程worker，临时文件:%1 范围:0-%2 (endPoint=-1表示整文件下载)")
+             .arg(tempFilePath).arg(endPoint));
+        HttpWorker* worker = new HttpWorker(m_url, tempFilePath, 0, endPoint);
         m_workers.append(worker);
         connect(worker, &HttpWorker::progress, this, &DownloadTask::onWorkerProgress);
         connect(worker, &HttpWorker::finished, this, &DownloadTask::onWorkerFinished);
         connect(worker, &HttpWorker::error, this, &DownloadTask::onWorkerError);
         LOGD("单线程worker创建完成，提交到线程池...");
-        QThreadPool::globalInstance()->start(worker);
+        m_threadPool->start(worker);
         LOGD("单线程worker已提交到线程池");
         return;
     }
 
     LOGD(QString("使用多线程下载模式，文件大小:%1").arg(m_totalSize));
-    
+
+    // 防止 m_totalSize < m_threadCount 导致 chunkSize=0：
+    // 实际并发数不超过文件总字节数（至少 1 字节/线程），多余的 worker 就不再创建
+    const int effectiveThreadCount = qMin(m_threadCount, static_cast<int>(qMax<qint64>(1, m_totalSize)));
+    if (effectiveThreadCount != m_threadCount) {
+        LOGD(QString("线程数(%1)超过文件大小(%2)，调整为%3")
+             .arg(m_threadCount).arg(m_totalSize).arg(effectiveThreadCount));
+        m_threadCount = effectiveThreadCount;
+    }
+
     qint64 chunkSize = m_totalSize / m_threadCount;
+    // 向上取整修正：避免最后一个分片把前面 chunkSize 截 0
+    if (chunkSize <= 0) {
+        chunkSize = 1;
+    }
     QString baseFileName = QFileInfo(m_filePath).fileName();
-    
+
     for (int i = 0; i < m_threadCount; ++i) {
         qint64 startPoint = i * chunkSize;
-        qint64 endPoint = (i == m_threadCount - 1) ? m_totalSize - 1 : (startPoint + chunkSize - 1);
+        qint64 endPoint = (i == m_threadCount - 1) ? (m_totalSize - 1) : (startPoint + chunkSize - 1);
         QString tempFileName = baseFileName + QString(".part%1").arg(i);
         QString tempFilePath = QDir(m_tempDirectory).filePath(tempFileName);
 
         LOGD(QString("创建worker%1 范围:%2-%3 临时文件:%4").arg(i).arg(startPoint).arg(endPoint).arg(tempFilePath));
-        
+
         HttpWorker* worker = new HttpWorker(m_url, tempFilePath, startPoint, endPoint);
         m_workers.append(worker);
 
@@ -636,10 +699,10 @@ void DownloadTask::createHttpWorkers()
         connect(worker, &HttpWorker::error, this, &DownloadTask::onWorkerError);
 
         LOGD(QString("worker%1创建完成，提交到线程池...").arg(i));
-        QThreadPool::globalInstance()->start(worker);
+        m_threadPool->start(worker);
         LOGD(QString("worker%1已提交到线程池").arg(i));
     }
-    
+
     LOGD("所有workers创建完成");
 }
 
@@ -667,7 +730,7 @@ void DownloadTask::onWorkerFinished()
 {
     bool shouldMergeFiles = false;
     int finishedCount = 0;
-    
+
     {
         QMutexLocker locker(&m_mutex); // 保护m_finishedWorkers和m_workers
         m_finishedWorkers++;
@@ -676,18 +739,37 @@ void DownloadTask::onWorkerFinished()
         // 直接比较，不调用allWorkersFinished()方法
         shouldMergeFiles = (m_finishedWorkers == m_threadCount);
     }
-    
+
     LOGD(QString("worker完成，已完成worker数:%1/%2").arg(finishedCount).arg(m_threadCount));
-    
+
     if (shouldMergeFiles) {
-        LOGD("所有worker完成，开始合并文件");
+        LOGD("所有worker完成，先停止所有worker确保它们不再写文件");
+        // 在合并/删除临时文件前，先确保所有worker都已停止（stopAsync内部已经
+        // 在onFinished中调用过cleanup，但保险起见再发一次）
+        {
+            QList<HttpWorker*> workers;
+            {
+                QMutexLocker locker(&m_mutex);
+                workers = m_workers;
+            }
+            for (HttpWorker* worker : workers) {
+                if (worker) {
+                    worker->stopAsync();
+                }
+            }
+        }
+
+        LOGD("开始合并文件");
         m_speedCalculationTimer.stop();
         if (mergeFiles()) {
             LOGD("文件合并成功");
             setStatus(DownloadTaskStatus::Completed);
             m_finishTime = QDateTime::currentDateTime();
             saveToHistory("Completed");
-            emit finished();
+            if (!m_alreadyFinished) {
+                m_alreadyFinished = true;
+                emit finished();
+            }
             LOGD(QString("任务完成 - URL:%1").arg(m_url.toString()));
         } else {
             LOGD("文件合并失败");
@@ -695,52 +777,57 @@ void DownloadTask::onWorkerFinished()
             m_finishTime = QDateTime::currentDateTime();
             saveToHistory("Failed");
             emit error(tr("文件合并失败！"));
-            emit finished();
+            if (!m_alreadyFinished) {
+                m_alreadyFinished = true;
+                emit finished();
+            }
             LOGD(QString("任务失败 - URL:%1").arg(m_url.toString()));
         }
-        LOGD("开始删除临时文件");
-        deleteTempFiles(); // 合并后删除临时文件
+        // 临时文件删除由mergeFiles()内部完成，避免worker还在写时被unlink
     }
 }
 
 void DownloadTask::onWorkerError(const QString& errorString)
 {
     bool shouldStopWorkers = false;
-    
+
     {
-        QMutexLocker locker(&m_mutex); // 保护m_status和m_workers
+        QMutexLocker statusLocker(&m_statusMutex); // 统一用m_statusMutex保护m_status
         if (m_status != DownloadTaskStatus::Failed && m_status != DownloadTaskStatus::Cancelled) {
             LOGD(QString("worker出错，错误信息:%1").arg(errorString));
-            setStatus(DownloadTaskStatus::Failed);
+            // 标记为Failed，保存历史
+            if (m_status != DownloadTaskStatus::Failed) {
+                m_status = DownloadTaskStatus::Failed; // 在statusMutex内直接赋值避免与setStatus异步排队冲突
+            }
             m_speedCalculationTimer.stop();
             m_finishTime = QDateTime::currentDateTime();
             saveToHistory("Failed");
             shouldStopWorkers = true;
         }
     }
-    
+
     if (shouldStopWorkers) {
-        LOGD(QString("停止所有其他worker，总数:%1").arg(m_workers.size()));
-        // 停止所有其他worker
-        for (HttpWorker* worker : m_workers) {
-            worker->stop();
+        QList<HttpWorker*> workers;
+        {
+            QMutexLocker locker(&m_mutex);
+            workers = m_workers;
         }
-        
+        LOGD(QString("停止所有其他worker，总数:%1").arg(workers.size()));
+        // 停止所有其他worker
+        for (HttpWorker* worker : workers) {
+            if (worker) {
+                worker->stop();
+            }
+        }
+
         // 发射信号
         emit error(tr("下载任务出错: %1").arg(errorString));
-        emit finished(); // 通知管理器任务已完成（失败也是一种完成状态）
+        if (!m_alreadyFinished) {
+            m_alreadyFinished = true;
+            emit finished(); // 通知管理器任务已完成（失败也是一种完成状态）
+        }
         LOGD(QString("任务错误处理完成 - URL:%1 错误:%2").arg(m_url.toString()).arg(errorString));
     }
-}
-
-void DownloadTask::onWorkerDownloadFinished()
-{
-    // 这个方法用于处理HttpWorker的downloadFinished信号
-    // 在多线程环境下，确保对m_workers的安全访问
-    QMutexLocker locker(&m_mutex); // 保护m_workers
-    // 目前不需要特殊处理，因为onWorkerFinished方法已经处理了worker完成的逻辑
-    // 这个信号主要用于通知事件循环退出
-    LOGD("接收到worker下载完成信号");
 }
 
 void DownloadTask::onSpeedCalculationTimerTimeout()
@@ -852,11 +939,11 @@ bool DownloadTask::validateFinalFile(qint64 totalBytesWritten, qint64 expectedSi
 bool DownloadTask::mergeFiles()
 {
     LOGD("开始合并文件");
-    
+
     // 在临时目录中创建临时合并文件
     QString tempMergeFileName = QFileInfo(m_filePath).fileName() + ".merge";
     QString tempMergeFilePath = QDir(m_tempDirectory).filePath(tempMergeFileName);
-    
+
     QFile tempMergeFile(tempMergeFilePath);
     if (!tempMergeFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         LOGD(QString("无法创建临时合并文件:%1 错误:%2").arg(tempMergeFilePath).arg(tempMergeFile.errorString()));
@@ -866,9 +953,9 @@ bool DownloadTask::mergeFiles()
     qint64 totalBytesWritten = 0;
     qint64 totalTempFileSize = 0;
     int threadCount = getThreadCount();
-    
+
     LOGD(QString("开始合并%1个临时文件到临时合并文件:%2").arg(threadCount).arg(tempMergeFilePath));
-    
+
     for (int i = 0; i < threadCount; ++i) {
         QString tempFileName = QFileInfo(m_filePath).fileName() + QString(".part%1").arg(i);
         QString tempFilePath = QDir(m_tempDirectory).filePath(tempFileName);
@@ -879,26 +966,26 @@ bool DownloadTask::mergeFiles()
         }
         totalTempFileSize += QFileInfo(tempFilePath).size();
     }
-    
+
     tempMergeFile.close();
-    
+
     qint64 totalSize = getTotalSize();
     LOGD(QString("文件合并完成，总写入字节数:%1 临时文件总大小:%2 期望总大小:%3").arg(totalBytesWritten).arg(totalTempFileSize).arg(totalSize));
-    
+
     // 验证临时合并文件的大小
     if (totalBytesWritten != totalSize) {
         LOGD(QString("临时合并文件大小与期望不符，实际:%1 期望:%2").arg(totalBytesWritten).arg(totalSize));
         QFile::remove(tempMergeFilePath);
         return false;
     }
-    
+
     // 将临时合并文件移动到最终位置
     if (!moveFileToFinalLocation(tempMergeFilePath, m_filePath)) {
         LOGD(QString("无法将临时合并文件移动到最终位置:%1 -> %2").arg(tempMergeFilePath).arg(m_filePath));
         QFile::remove(tempMergeFilePath);
         return false;
     }
-    
+
     // 验证最终文件
     if (!validateFinalFile(totalBytesWritten, totalSize)) {
         return false;
@@ -906,6 +993,10 @@ bool DownloadTask::mergeFiles()
 
     updateDownloadedSize(totalSize);
     LOGD(QString("文件成功移动到最终位置:%1").arg(m_filePath));
+
+    // 合并完成且最终文件已落盘后再删除临时分片文件，确保worker不再写时再unlink
+    LOGD("合并完成，开始删除临时分片文件");
+    deleteTempFiles();
     return true;
 }
 

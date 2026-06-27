@@ -11,6 +11,15 @@
 /**
  * @brief LocalServer类用于创建一个本地TCP服务器，监听特定端口。
  * 主要用于接收来自浏览器插件或其他应用的下载请求。
+ *
+ * @attention 协议说明：本类使用 **裸 JSON 协议**（客户端直接发送 JSON 对象，
+ * 服务端回复一行 JSON），与 HttpServer 使用的 HTTP/JSON 协议不同。
+ * 当前 main.cpp 仅实例化 HttpServer，本类处于备用状态，保留以备未来切换。
+ * 如果启用本类，请确保客户端按如下格式通信：
+ *   请求（任意时刻 TCP 上发送一个 JSON 对象）：
+ *     {"url": "https://...", "savePath": "/optional/path"}
+ *   响应（服务端写一行 JSON + 换行）：
+ *     {"status":"success","message":"..."}
  */
 class LocalServer : public QObject
 {

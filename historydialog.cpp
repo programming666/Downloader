@@ -60,7 +60,7 @@ void HistoryDialog::updateTable()
         
         // 文件名
         QTableWidgetItem *fileNameItem = new QTableWidgetItem(record.fileName);
-        fileNameItem->setData(Qt::UserRole, i); // 存储原始索引
+        fileNameItem->setData(Qt::UserRole, record.id); // 存储记录主键 id，避免三字段匹配误删
         ui->tableWidget->setItem(i, 0, fileNameItem);
         
         // URL
@@ -103,8 +103,9 @@ void HistoryDialog::updateTable()
         }
         ui->tableWidget->setItem(i, 4, statusItem);
         
-        // 线程数 - 使用默认值1，因为DownloadRecord中没有这个字段
-        ui->tableWidget->setItem(i, 5, new QTableWidgetItem(QString::number(1)));
+        // 线程数
+        QString threadText = (record.threadCount > 0) ? QString::number(record.threadCount) : tr("未知");
+        ui->tableWidget->setItem(i, 5, new QTableWidgetItem(threadText));
     }
     
     // 调整列宽
@@ -147,33 +148,31 @@ void HistoryDialog::onDeleteClicked()
     if (currentRow < 0 || currentRow >= m_filteredRecords.size()) {
         return;
     }
-    
+
     const DownloadRecord &record = m_filteredRecords[currentRow];
-    
-    int ret = QMessageBox::question(this, tr("确认删除"), 
+
+    int ret = QMessageBox::question(this, tr("确认删除"),
                                    tr("确定要删除选中的记录吗？\n文件名：%1").arg(record.fileName),
                                    QMessageBox::Yes | QMessageBox::No,
                                    QMessageBox::No);
-    
+
     if (ret == QMessageBox::Yes) {
         LOGD(QString("用户确认删除记录：%1").arg(record.fileName));
-        // 找到在全部记录中的索引
-        int originalIndex = -1;
-        for (int i = 0; i < m_allRecords.size(); ++i) {
-            if (m_allRecords[i].url == record.url && 
-                m_allRecords[i].fileName == record.fileName &&
-                m_allRecords[i].startTime == record.startTime) {
-                originalIndex = i;
-                break;
+        // 直接通过主键 id 删除，避免 URL+fileName+startTime 多字段匹配误删
+        int id = record.id;
+        if (id <= 0) {
+            // 兼容极端情况：若 id 为 0，尝试从表格行数据中再读一次
+            QTableWidgetItem *firstItem = ui->tableWidget->item(currentRow, 0);
+            if (firstItem) {
+                id = firstItem->data(Qt::UserRole).toInt();
             }
         }
-        
-        if (originalIndex >= 0 && m_historyManager.deleteRecord(originalIndex)) {
-            LOGD("记录删除成功");
+        if (id > 0 && m_historyManager.deleteRecordById(id)) {
+            LOGD(QString("记录删除成功，id=%1").arg(id));
             loadHistory();
             QMessageBox::information(this, tr("成功"), tr("记录已删除"));
         } else {
-            LOGD("记录删除失败");
+            LOGD(QString("记录删除失败，id=%1").arg(id));
             QMessageBox::warning(this, tr("错误"), tr("删除记录失败"));
         }
     }

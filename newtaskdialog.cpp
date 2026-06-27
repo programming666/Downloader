@@ -28,7 +28,7 @@ NewTaskDialog::NewTaskDialog(QWidget *parent)
     ui->threadCountSpinBox->setValue(SettingsManager::instance().loadDefaultThreads());
 
     // 限制线程数范围
-    ui->threadCountSpinBox->setRange(1, 114514); // 建议限制在1-32之间
+    ui->threadCountSpinBox->setRange(1, 32);
 
     // 应用当前主题样式
     applyTheme();

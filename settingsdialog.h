@@ -47,6 +47,11 @@ private slots:
     void on_cancelButton_clicked();
 
 private:
+    /**
+     * @brief 重写accept，确保点击OK时也会保存设置。
+     */
+    void accept() override;
+
     Ui::SettingsDialog *ui; ///< UI界面指针。
 
     /**

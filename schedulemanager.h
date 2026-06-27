@@ -51,6 +51,10 @@ class ScheduleManager : public QObject
     Q_OBJECT
 
 public:
+    /**
+     * @brief 获取定时任务管理器的单例实例。
+     * @return ScheduleManager的唯一实例。
+     */
     static ScheduleManager* instance();
     
     /**
@@ -111,7 +115,6 @@ private:
     explicit ScheduleManager(QObject *parent = nullptr);
     ~ScheduleManager();
     
-    static ScheduleManager* m_instance; ///< 单例实例
     QTimer* m_timer;                   ///< 定时器
     QMap<int, ScheduledTask> m_tasks;  ///< 定时任务映射
     int m_nextTaskId;                  ///< 下一个任务ID

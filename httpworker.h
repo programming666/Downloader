@@ -9,6 +9,7 @@
 #include <QUrl>
 #include <QDebug>
 #include <QEventLoop>
+#include <atomic>
 
 /**
  * @brief HttpWorker类是执行文件分块下载的实际工作单元。
@@ -32,6 +33,11 @@ public:
     ~HttpWorker();
 
     /**
+     * @brief 重置HttpWorker状态，允许重新启动下载（用于断点续传）
+     */
+    void reset();
+
+    /**
      * @brief QRunnable的运行方法，在线程池中执行
      */
     void run() override;
@@ -40,7 +46,7 @@ public:
      * @brief 停止下载。
      */
     void stop();
-    
+
     /**
      * @brief 异步停止下载。
      */
@@ -103,13 +109,16 @@ private:
     QString m_filePath;             ///< 临时文件的路径。
     qint64 m_startPoint;            ///< 下载范围的起始点。
     qint64 m_endPoint;              ///< 下载范围的结束点。
-    qint64 m_bytesReceived;         ///< 已接收的字节数。
+    std::atomic<qint64> m_bytesReceived;     ///< 已接收的字节数（原子类型，跨线程安全，支持>2GB文件）。
 
     QNetworkAccessManager* m_netManager; ///< 网络访问管理器。
     QNetworkReply* m_reply;         ///< 网络应答。
     QFile* m_file;                  ///< 临时文件。
 
     bool m_isStopped;               ///< 标记是否已停止。
+    int m_retryCount;               ///< 当前重试次数（实例成员，避免跨worker共享）。
+    bool m_alreadyFinished;         ///< 标记finished/error是否已发射，避免重复发射。
+    qint64 m_lastLoggedBytes{0};    ///< 上次记录日志时的字节数（实例成员，避免跨worker共享）。
 };
 
 #endif // HTTPWORKER_H

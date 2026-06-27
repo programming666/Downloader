@@ -12,7 +12,11 @@
 #include <QTranslator>
 #include <QLocale>
 #include <QTimer> // 用于延迟启动任务
+#include <QProgressDialog>
 #include <utility> // 用于std::as_const
+#include <memory>  // 用于std::unique_ptr
+#include <QFileInfo>
+#include <QDir>
 
 /**
  * @brief 主窗口构造函数
@@ -33,6 +37,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_settingsManager(SettingsManager::instance())
     , m_historyManager(HistoryManager::instance()),
     m_uiUpdateTimer(new QTimer(this))
+    , m_translator(nullptr)
 {
     ui->setupUi(this);
     initUI();
@@ -59,8 +64,15 @@ MainWindow::MainWindow(QWidget *parent)
     // 加载上次保存的主题
     loadStyleSheet(m_settingsManager.loadTheme());
 
+    // 根据系统区域初始化当前语言代码（用于 updateLanguageMenu 判定）
+    QString sysLocale = QLocale::system().name();
+    m_currentLanguage = sysLocale.startsWith("zh") ? "zh_CN" : "en_US";
+
     // 初始化语言菜单
     updateLanguageMenu();
+
+    // 接管翻译器：根据 m_currentLanguage 安装翻译（避免 main 与 mainwindow 双重管理）
+    switchLanguage(m_currentLanguage);
 
     // 设置UI更新定时器
     connect(m_uiUpdateTimer, &QTimer::timeout, this, &MainWindow::onUiUpdateTimerTimeout);
@@ -69,8 +81,21 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    // 清理翻译器：先从应用移除再 delete，避免悬空
+    if (m_translator) {
+        qApp->removeTranslator(m_translator);
+        delete m_translator;
+        m_translator = nullptr;
+    }
     delete ui;
     // m_systemTray的父对象是MainWindow，会自动删除
+}
+
+void MainWindow::requestQuit()
+{
+    // 标记为正在退出，让 closeEvent 接受关闭事件
+    m_quitting = true;
+    QApplication::quit();
 }
 
 void MainWindow::initUI()
@@ -340,12 +365,43 @@ void MainWindow::showSystemNotification(const QString& title, const QString& mes
 void MainWindow::onNewDownloadRequestFromBrowser(const QString& url, const QString& savePath)
 {
     qDebug() << "Received download request from browser plugin. URL:" << url << "Save Path:" << savePath;
-    // 这里可以弹出一个确认对话框，或者直接创建任务
-    // 暂时直接创建任务
-    QString finalSavePath = savePath.isEmpty() ? m_settingsManager.loadDefaultDownloadPath() + "/" + QUrl(url).fileName() : savePath;
-    DownloadTask* task = m_downloadManager.createTask(url, finalSavePath, m_settingsManager.loadDefaultThreads());
+
+    // URL 协议校验：只接受 http/https，避免浏览器插件把 file:// 等协议丢过来
+    if (url.isEmpty() || !(url.startsWith("http://") || url.startsWith("https://"))) {
+        qWarning() << "Rejected browser download request with invalid URL:" << url;
+        showSystemNotification(tr("新下载任务被拒绝"),
+                               tr("不支持的URL协议，仅支持http/https。"),
+                               QSystemTrayIcon::Warning);
+        return;
+    }
+
+    QUrl urlObj(url);
+    QString fileName = urlObj.fileName();
+    if (fileName.isEmpty()) {
+        // 没有文件名时回退到默认名，避免生成空文件名导致任务无法落地
+        fileName = "download";
+    }
+
+    // 计算最终保存路径：插件传入的 savePath 为空或仅目录时，根据默认下载目录补全
+    QString finalSavePath;
+    if (savePath.isEmpty()) {
+        finalSavePath = m_settingsManager.loadDefaultDownloadPath() + "/" + fileName;
+    } else {
+        QFileInfo info(savePath);
+        if (info.isDir()) {
+            finalSavePath = QDir(savePath).absoluteFilePath(fileName);
+        } else {
+            finalSavePath = savePath;
+        }
+    }
+
+    DownloadTask* task = m_downloadManager.createTask(urlObj, finalSavePath, m_settingsManager.loadDefaultThreads());
+    if (!task) {
+        qWarning() << "Failed to create download task from browser request:" << url;
+        return;
+    }
     m_downloadManager.startTask(task);
-    showSystemNotification(tr("新下载任务"), tr("已从浏览器插件接收到下载任务：%1").arg(QUrl(url).fileName()), QSystemTrayIcon::Information);
+    showSystemNotification(tr("新下载任务"), tr("已从浏览器插件接收到下载任务：%1").arg(fileName), QSystemTrayIcon::Information);
 }
 
 /**
@@ -416,11 +472,14 @@ void MainWindow::on_actionNewTask_triggered()
             LOGD("状态栏更新完成");
 
             LOGD("设置 QTimer 延迟启动");
-            QTimer::singleShot(100, this, [this, task]() {
-                LOGD("QTimer 回调执行，开始启动任务");
-                LOGD("调用 m_downloadManager.startTask");
-                m_downloadManager.startTask(task);
-                LOGD("startTask 调用完成");
+            QPointer<DownloadTask> taskPtr(task);
+            QTimer::singleShot(kTaskStartDelayMs, this, [this, taskPtr]() {
+                if (!taskPtr) {
+                    LOGD("任务对象已被销毁，跳过启动");
+                    return;
+                }
+                LOGD(QString("QTimer 回调执行，启动任务: %1").arg(taskPtr->fileName()));
+                m_downloadManager.startTask(taskPtr.data());
             });
             LOGD("QTimer 设置完成");
         } else {
@@ -558,8 +617,6 @@ void MainWindow::on_actionDeleteSelected_triggered()
     }
 }
 
-#include <QProgressDialog>
-
 void MainWindow::on_actionPauseSelected_triggered()
 {
     QList<QTableWidgetItem*> selectedItems = ui->tableWidget->selectedItems();
@@ -670,23 +727,29 @@ void MainWindow::on_actionAbout_triggered()
 void MainWindow::onTaskAdded(DownloadTask* task)
 {
     LOGD(QString("接收到taskAdded信号 - 任务:%1 URL:%2").arg(task ? task->fileName() : "空").arg(task ? task->url() : "空"));
-    
+
     if (task) {
         LOGD("开始添加任务到表格");
         addTaskToTable(task);
         LOGD("任务已添加到表格");
-        
+
         ui->statusbar->showMessage(tr("新任务已添加：%1").arg(task->fileName()));
         LOGD("状态栏消息已更新");
-        
+
         // 系统通知
         LOGD("显示系统托盘通知");
         showSystemNotification(tr("新任务"), tr("已添加任务：%1").arg(task->fileName()), QSystemTrayIcon::Information);
         LOGD("系统托盘通知已显示");
+
+        // 有新任务时确保 UI 更新定时器处于运行状态
+        if (!m_uiUpdateTimer->isActive()) {
+            m_uiIdleTicks = 0;
+            m_uiUpdateTimer->start(200);
+        }
     } else {
         LOGD("任务指针为空，无法添加");
     }
-    
+
     LOGD("任务添加处理完成");
 }
 
@@ -740,6 +803,11 @@ void MainWindow::onTaskProgressUpdated(qint64 bytesReceived, qint64 totalBytes, 
         }
         
         m_tasksToUpdate.insert(task);
+        // 收到进度回调时确保定时器是运行的（防止上面 stop 后没有重新启动）
+        if (!m_uiUpdateTimer->isActive()) {
+            m_uiIdleTicks = 0;
+            m_uiUpdateTimer->start(200);
+        }
     }
 }
 
@@ -809,6 +877,12 @@ void MainWindow::onThemeChanged(const QString& themeName)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // 如果是程序主动退出（托盘退出等），直接接受关闭事件
+    if (m_quitting) {
+        event->accept();
+        return;
+    }
+
     if (m_systemTray && m_systemTray->isVisible()) {
         hide(); // 隐藏主窗口
         showSystemNotification(tr("下载器正在后台运行"), tr("点击图标可恢复窗口。"), QSystemTrayIcon::Information);
@@ -864,53 +938,68 @@ void MainWindow::on_actionEnglish_triggered()
 
 void MainWindow::switchLanguage(const QString& language)
 {
-    static QTranslator translator;
-    
-    // 移除旧的翻译
-    qApp->removeTranslator(&translator);
-    
-    // 加载新的翻译文件
+    // 尝试加载新翻译，失败时不要破坏当前已安装的翻译器
+    // QTranslator 禁用了拷贝/移动赋值，所以用 unique_ptr 管理新翻译器，
+    // 加载成功后转移所有权到 m_translator 指针。
+    std::unique_ptr<QTranslator> newTranslator(new QTranslator());
+    bool loaded = false;
+    QString loadedFrom;
+
+    auto tryLoad = [&newTranslator, &loaded, &loadedFrom](const QString& path) -> bool {
+        if (newTranslator->load(path)) {
+            loaded = true;
+            loadedFrom = path;
+            return true;
+        }
+        return false;
+    };
+
     if (language == "zh_CN") {
-        // 首先尝试从资源文件加载
-        if (translator.load(":/translations/zh_CN.qm")) {
-            qApp->installTranslator(&translator);
-            qDebug() << "Switched to Chinese (from resource)";
-        } else {
-            // 如果资源文件加载失败，尝试从文件系统加载
-            if (translator.load("translations/zh_CN.qm")) {
-                qApp->installTranslator(&translator);
-                qDebug() << "Switched to Chinese (from file system)";
-            } else {
-                qWarning() << "Failed to load Chinese translation";
-            }
+        loaded = tryLoad(":/translations/zh_CN.qm");
+        if (!loaded) {
+            QString appDir = QCoreApplication::applicationDirPath();
+            loaded = tryLoad(appDir + "/translations/zh_CN.qm");
+        }
+        if (!loaded) {
+            loaded = tryLoad("translations/zh_CN.qm");
         }
     } else if (language == "en_US") {
-        // 首先尝试从资源文件加载
-        if (translator.load(":/translations/en_US.qm")) {
-            qApp->installTranslator(&translator);
-            qDebug() << "Switched to English (from resource)";
-        } else {
-            // 如果资源文件加载失败，尝试从文件系统加载
-            if (translator.load("translations/en_US.qm")) {
-                qApp->installTranslator(&translator);
-                qDebug() << "Switched to English (from file system)";
-            } else {
-                qWarning() << "Failed to load English translation";
-            }
+        loaded = tryLoad(":/translations/en_US.qm");
+        if (!loaded) {
+            QString appDir = QCoreApplication::applicationDirPath();
+            loaded = tryLoad(appDir + "/translations/en_US.qm");
+        }
+        if (!loaded) {
+            loaded = tryLoad("translations/en_US.qm");
         }
     }
-    
+
+    if (loaded) {
+        // 加载成功才替换：先移除旧翻译器，删除旧对象，再安装新翻译器
+        if (m_translator) {
+            qApp->removeTranslator(m_translator);
+            delete m_translator;
+            m_translator = nullptr;
+        }
+        m_translator = newTranslator.release();
+        qApp->installTranslator(m_translator);
+        m_currentLanguage = language;
+        qDebug() << "Switched to" << language << "from" << loadedFrom;
+    } else {
+        qWarning() << "Failed to load translation for" << language;
+    }
+
     // 重新翻译UI
     ui->retranslateUi(this);
-    
+
     // 重新设置表头标签
     ui->tableWidget->setHorizontalHeaderLabels({
         tr("文件名"), tr("URL"), tr("进度"), tr("大小"), tr("速度"), tr("状态"), tr("操作")
     });
-    
+
     // 更新语言菜单状态
     updateLanguageMenu();
-    
+
     // 显示切换成功消息
     if (language == "zh_CN") {
         ui->statusbar->showMessage(tr("已切换到中文界面"));
@@ -921,29 +1010,17 @@ void MainWindow::switchLanguage(const QString& language)
 
 /**
  * @brief 更新语言菜单状态
- * 
- * 根据当前界面语言设置语言菜单项的选中状态：
- * 1. 通过检查窗口标题判断当前语言(中文或英文)
- * 2. 设置对应语言菜单项的checked状态
- * 3. 确保每次语言切换后菜单状态同步更新
+ *
+ * 根据当前界面语言设置语言菜单项的选中状态。
+ * 统一使用 m_currentLanguage 成员变量，不再依赖窗口标题字符串匹配。
  */
 void MainWindow::updateLanguageMenu()
 {
-    // 根据当前语言更新菜单项的选中状态
-    QString currentLanguage = "zh_CN"; // 默认中文
-    
-    // 检查当前界面语言
-    // 如果窗口标题是英文，说明当前是英文模式
-    if (windowTitle().contains("Multi-thread")) {
-        currentLanguage = "en_US";
-    }
-    
-    // 直接通过ui指针访问动作，因为它们在ui_mainwindow.h中已声明
     if (ui->actionChinese) {
-        ui->actionChinese->setChecked(currentLanguage == "zh_CN");
+        ui->actionChinese->setChecked(m_currentLanguage == "zh_CN");
     }
     if (ui->actionEnglish) {
-        ui->actionEnglish->setChecked(currentLanguage == "en_US");
+        ui->actionEnglish->setChecked(m_currentLanguage == "en_US");
     }
 }
 
@@ -961,8 +1038,14 @@ void MainWindow::updateLanguageMenu()
 void MainWindow::onUiUpdateTimerTimeout()
 {
     if (m_tasksToUpdate.isEmpty()) {
+        // 连续多次无任务时停止定时器，避免空转
+        if (++m_uiIdleTicks >= 3 && m_uiUpdateTimer->isActive()) {
+            m_uiUpdateTimer->stop();
+            m_uiIdleTicks = 3;
+        }
         return;
     }
+    m_uiIdleTicks = 0;
 
     // 批量更新
     for (DownloadTask* task : std::as_const(m_tasksToUpdate)) {
@@ -1070,16 +1153,27 @@ void MainWindow::setupHeaderBehavior()
 {
     connect(ui->tableWidget->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int logicalIndex, int oldSize, int newSize) {
         Q_UNUSED(oldSize)
-        
+
         const int minWidths[] = {120, 200, 120, 80, 80, 80, 80};
         const int maxWidths[] = {300, 400, 150, 120, 120, 100, 100};
-        
-        if (logicalIndex < 7) {
-            if (newSize < minWidths[logicalIndex]) {
-                ui->tableWidget->setColumnWidth(logicalIndex, minWidths[logicalIndex]);
-            } else if (newSize > maxWidths[logicalIndex]) {
-                ui->tableWidget->setColumnWidth(logicalIndex, maxWidths[logicalIndex]);
+
+        if (logicalIndex < 0 || logicalIndex >= 7) {
+            return;
+        }
+
+        // URL 列（索引1）特殊处理：固定一个最小宽度，不让用户拖到 0
+        if (logicalIndex == 1) {
+            if (newSize < minWidths[1]) {
+                ui->tableWidget->setColumnWidth(1, minWidths[1]);
             }
+            // URL 列是 Stretch 模式，不强制上限
+            return;
+        }
+
+        if (newSize < minWidths[logicalIndex]) {
+            ui->tableWidget->setColumnWidth(logicalIndex, minWidths[logicalIndex]);
+        } else if (newSize > maxWidths[logicalIndex]) {
+            ui->tableWidget->setColumnWidth(logicalIndex, maxWidths[logicalIndex]);
         }
     });
 }
@@ -1094,30 +1188,35 @@ void MainWindow::setupResponsiveTableColumns()
 /**
  * @brief 处理定时下载任务触发
  * @param task 触发的定时任务
- * 
- * 当定时任务到达预定时间时，自动创建并开始下载任务
+ *
+ * 当定时任务到达预定时间时，自动创建并开始下载任务。
+ * 注意：schedulemanager.cpp 在遍历 m_tasks 期间触发了此槽，
+ * 这里先按值拷贝一份本地副本，避免直接引用 m_tasks 中的元素。
  */
 void MainWindow::onScheduledTaskTriggered(const ScheduledTask& task)
 {
-    LOGD(QString("定时任务触发 - 文件:%1 URL:%2").arg(task.fileName).arg(task.url));
-    
+    // 先做值拷贝，避免 schedule 内部迭代与触发并发（schedulemanager.cpp 在迭代中触发此槽）
+    const ScheduledTask taskCopy = task;
+
+    LOGD(QString("定时任务触发 - 文件:%1 URL:%2").arg(taskCopy.fileName).arg(taskCopy.url));
+
     // 创建下载任务
-    DownloadTask* downloadTask = m_downloadManager.createTask(QUrl(task.url), task.savePath, 4);
+    DownloadTask* downloadTask = m_downloadManager.createTask(QUrl(taskCopy.url), taskCopy.savePath, 4);
     if (downloadTask) {
         // 开始下载
         m_downloadManager.startTask(downloadTask);
-        
+
         // 显示系统通知
-        showSystemNotification(tr("定时下载开始"), 
-                              tr("文件 '%1' 定时下载已开始").arg(task.fileName), 
+        showSystemNotification(tr("定时下载开始"),
+                              tr("文件 '%1' 定时下载已开始").arg(taskCopy.fileName),
                               QSystemTrayIcon::Information);
-        
-        LOGD(QString("定时下载任务已开始 - 文件:%1").arg(task.fileName));
+
+        LOGD(QString("定时下载任务已开始 - 文件:%1").arg(taskCopy.fileName));
     } else {
-        LOGD(QString("定时下载任务创建失败 - 文件:%1 URL:%2").arg(task.fileName).arg(task.url));
-        
-        showSystemNotification(tr("定时下载失败"), 
-                              tr("文件 '%1' 定时下载失败").arg(task.fileName), 
+        LOGD(QString("定时下载任务创建失败 - 文件:%1 URL:%2").arg(taskCopy.fileName).arg(taskCopy.url));
+
+        showSystemNotification(tr("定时下载失败"),
+                              tr("文件 '%1' 定时下载失败").arg(taskCopy.fileName),
                               QSystemTrayIcon::Warning);
     }
 }

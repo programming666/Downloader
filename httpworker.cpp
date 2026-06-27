@@ -3,6 +3,7 @@
 #include <QTimer>
 #include <QThread>
 #include <QApplication>
+#include <QPointer>
 
 /**
  * @brief HTTP下载工作线程构造函数
@@ -25,23 +26,44 @@ HttpWorker::HttpWorker(const QUrl& url, const QString& filePath, qint64 startPoi
       m_netManager(nullptr),
       m_reply(nullptr),
       m_file(nullptr),
-      m_isStopped(false)
+      m_isStopped(false),
+      m_retryCount(0),
+      m_alreadyFinished(false)
 {
     LOGD(QString("构造HttpWorker - URL:%1 文件路径:%2 范围:%3-%4").arg(url.toString()).arg(filePath).arg(startPoint).arg(endPoint));
     setAutoDelete(false); // 不自动删除，由DownloadTask管理
     LOGD("HttpWorker构造完成，设置为手动删除模式");
 }
 
+/**
+ * @brief 重置HttpWorker状态，允许重新启动下载（用于断点续传）
+ *
+ * 把m_isStopped、m_retryCount、m_alreadyFinished 复位，保留已写入字节数（m_bytesReceived）
+ * 由continueDownload根据文件大小重新计算。这样resume()提交到线程池后worker能正常运行。
+ */
+void HttpWorker::reset()
+{
+    m_isStopped = false;
+    m_retryCount = 0;
+    m_alreadyFinished = false;
+    LOGD(QString("重置HttpWorker状态 - 文件:%1 范围:%2-%3 已接收:%4")
+         .arg(m_filePath).arg(m_startPoint).arg(m_endPoint).arg(m_bytesReceived.load(std::memory_order_acquire)));
+}
+
 HttpWorker::~HttpWorker()
 {
     LOGD(QString("开始析构HttpWorker - 文件:%1").arg(m_filePath));
-    
-    // 确保所有资源都被清理
+
+    // 先断开网络应答信号连接，避免异步事件触发已析构对象的槽函数
     if (m_reply) {
-        LOGD("中止网络请求");
+        LOGD("中止网络请求并断开信号");
+        m_reply->disconnect(this);
         m_reply->abort();
         m_reply->deleteLater();
+        m_reply = nullptr;
     }
+
+    // 确保所有资源都被清理
     if (m_file && m_file->isOpen()) {
         LOGD("关闭文件");
         m_file->close();
@@ -49,13 +71,14 @@ HttpWorker::~HttpWorker()
     if (m_file) {
         LOGD("删除文件对象");
         delete m_file;
+        m_file = nullptr;
     }
     if (m_netManager) {
         LOGD("标记网络管理器为延迟删除");
         m_netManager->deleteLater();
         m_netManager = nullptr;
     }
-    
+
     LOGD("HttpWorker析构完成");
 }
 
@@ -115,19 +138,23 @@ void HttpWorker::startDownload()
         continueDownload();
     } else {
         // 使用QTimer::singleShot在主线程中创建网络管理器
-        QTimer::singleShot(0, qApp, [this]() {
-            if (m_isStopped) {
-                LOGD("任务已停止，取消网络管理器创建");
-                cleanup();
+        QPointer<HttpWorker> safeThis(this);
+        QTimer::singleShot(0, qApp, [safeThis]() {
+            if (!safeThis) {
                 return;
             }
-            
+            if (safeThis->m_isStopped) {
+                LOGD("任务已停止，取消网络管理器创建");
+                safeThis->cleanup();
+                return;
+            }
+
             LOGD("在主线程中创建QNetworkAccessManager");
-            m_netManager = new QNetworkAccessManager();
+            safeThis->m_netManager = new QNetworkAccessManager();
             LOGD("QNetworkAccessManager创建完成，开始网络请求");
-            
+
             // 继续执行下载逻辑
-            continueDownload();
+            safeThis->continueDownload();
         });
     }
 }
@@ -136,14 +163,23 @@ void HttpWorker::continueDownload()
 {
 
     LOGD(QString("开始创建文件对象:%1").arg(m_filePath));
+    // 防御性清理：resume/retry 时 m_file 可能指向旧指针（被前面的 run 流程创建过），
+    // 避免 new QFile 覆盖导致旧对象泄漏
+    if (m_file) {
+        if (m_file->isOpen()) {
+            m_file->close();
+        }
+        delete m_file;
+        m_file = nullptr;
+    }
     m_file = new QFile(m_filePath);
     LOGD("文件对象创建完成");
 
     // 检查是否需要断点续传
     LOGD(QString("检查文件是否存在:%1").arg(m_file->exists() ? "存在" : "不存在"));
     if (m_file->exists()) {
-        m_bytesReceived = m_file->size();
-        LOGD(QString("文件已存在，大小:%1，使用追加模式").arg(m_bytesReceived));
+        m_bytesReceived.store(m_file->size(), std::memory_order_release);
+        LOGD(QString("文件已存在，大小:%1，使用追加模式").arg(m_bytesReceived.load(std::memory_order_acquire)));
         if (!m_file->open(QIODevice::Append)) {
             LOGD(QString("无法打开文件进行追加，错误:%1").arg(m_file->errorString()));
             emit error(tr("无法打开临时文件进行追加: %1").arg(m_file->errorString()));
@@ -162,22 +198,31 @@ void HttpWorker::continueDownload()
         LOGD("新文件创建成功");
     }
 
-    qint64 currentStartPoint = m_startPoint + m_bytesReceived;
-    LOGD(QString("计算当前开始点:%1 (原始开始点:%2 + 已接收字节数:%3)").arg(currentStartPoint).arg(m_startPoint).arg(m_bytesReceived));
+    qint64 currentStartPoint = m_startPoint + m_bytesReceived.load(std::memory_order_acquire);
+    LOGD(QString("计算当前开始点:%1 (原始开始点:%2 + 已接收字节数:%3)").arg(currentStartPoint).arg(m_startPoint).arg(m_bytesReceived.load(std::memory_order_acquire)));
 
-    // 如果这个分块已经下载完成
-    if (currentStartPoint > m_endPoint) {
+    // 如果这个分块已经下载完成（endPoint==-1 表示整文件下载，没有结束点，跳过判断）
+    if (m_endPoint >= 0 && currentStartPoint > m_endPoint) {
         LOGD(QString("分块已完成下载，当前开始点:%1 > 结束点:%2").arg(currentStartPoint).arg(m_endPoint));
         m_file->close();
         cleanup();
-        emit finished();
+        if (!m_alreadyFinished) {
+            m_alreadyFinished = true;
+            emit finished();
+        }
         return;
     }
 
     QNetworkRequest request(m_url);
-    // 设置Range头，请求文件的特定部分
-    QString rangeHeader = QString("bytes=%1-%2").arg(currentStartPoint).arg(m_endPoint);
-    request.setRawHeader("Range", rangeHeader.toUtf8());
+    // 仅当 endPoint != -1（已知结束字节）时设置 Range 头；endPoint==-1 表示未知长度，
+    // 不发 Range 头，让服务器返回完整文件
+    if (m_endPoint >= 0) {
+        QString rangeHeader = QString("bytes=%1-%2").arg(currentStartPoint).arg(m_endPoint);
+        request.setRawHeader("Range", rangeHeader.toUtf8());
+        LOGD(QString("设置Range头:%1").arg(rangeHeader));
+    } else {
+        LOGD("endPoint=-1，整文件下载，不设置Range头");
+    }
     request.setTransferTimeout(30000); // 30秒超时
     
     // 设置User-Agent，避免被网站屏蔽
@@ -187,8 +232,6 @@ void HttpWorker::continueDownload()
     request.setRawHeader("Accept", "*/*");
     request.setRawHeader("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7");
     request.setRawHeader("Connection", "keep-alive");
-    
-    LOGD(QString("设置Range头:%1").arg(rangeHeader));
 
     LOGD("发送网络请求...");
     LOGD("开始调用m_netManager->get()...");
@@ -298,20 +341,21 @@ void HttpWorker::onReadyRead()
 
     QByteArray data = m_reply->readAll();
     qint64 dataSize = data.size();
-    
+
     if (dataSize > 0) {
         qint64 written = m_file->write(data);
         if (written != dataSize) {
             LOGD(QString("文件写入不完整，期望:%1 实际:%2").arg(dataSize).arg(written));
         }
-        m_bytesReceived += dataSize;
+        // 使用 std::atomic 的 fetch_add（语义等于旧的 fetchAndAddRelease），无需再 store
+        m_bytesReceived.fetch_add(dataSize, std::memory_order_release);
         emit progress(dataSize);
-        
+
         // 每接收1MB数据记录一次日志，避免日志过多
-        static qint64 lastLoggedBytes = 0;
-        if (m_bytesReceived - lastLoggedBytes >= 1024 * 1024) {
-            LOGD(QString("接收数据进度 - 本次:%1字节 总计:%2字节").arg(dataSize).arg(m_bytesReceived));
-            lastLoggedBytes = m_bytesReceived;
+        const qint64 curBytes = m_bytesReceived.load(std::memory_order_acquire);
+        if (curBytes - m_lastLoggedBytes >= 1024 * 1024) {
+            LOGD(QString("接收数据进度 - 本次:%1字节 总计:%2字节").arg(dataSize).arg(curBytes));
+            m_lastLoggedBytes = curBytes;
         }
     }
 }
@@ -319,7 +363,7 @@ void HttpWorker::onReadyRead()
 void HttpWorker::onFinished()
 {
     LOGD("网络请求完成，开始处理结果...");
-    
+
     if (m_isStopped) {
         LOGD("任务已停止，清理资源并退出");
         cleanup();
@@ -327,13 +371,19 @@ void HttpWorker::onFinished()
     }
 
     if (m_reply->error() == QNetworkReply::NoError) {
-        LOGD(QString("下载成功完成 - 总接收字节数:%1").arg(m_bytesReceived));
-        emit finished();
+        LOGD(QString("下载成功完成 - 总接收字节数:%1").arg(m_bytesReceived.load(std::memory_order_acquire)));
+        if (!m_alreadyFinished) {
+            m_alreadyFinished = true;
+            emit finished();
+        }
     } else {
         LOGD(QString("下载出现错误 - 错误码:%1 错误信息:%2").arg(m_reply->error()).arg(m_reply->errorString()));
-        emit error(m_reply->errorString());
+        if (!m_alreadyFinished) {
+            m_alreadyFinished = true;
+            emit error(m_reply->errorString());
+        }
     }
-    
+
     LOGD("开始清理资源");
     cleanup();
     LOGD("onFinished处理完成");
@@ -342,53 +392,60 @@ void HttpWorker::onFinished()
 void HttpWorker::onErrorOccurred(QNetworkReply::NetworkError code)
 {
     LOGD(QString("网络错误发生 - 错误码:%1").arg(code));
-    
+
     QString errorString = m_reply ? m_reply->errorString() : "未知错误";
     LOGD(QString("错误详细信息:%1").arg(errorString));
-    
+
     if (m_isStopped && code == QNetworkReply::OperationCanceledError) {
         // 用户主动停止，不是错误
         LOGD("用户主动停止下载，这不是错误");
+        if (!m_alreadyFinished) {
+            m_alreadyFinished = true;
+            emit finished();
+        }
         cleanup();
-        emit finished();
         return;
     }
-    
-    // 检查是否需要重试（网络相关错误）
-    static int retryCount = 0;
+
+    // 检查是否需要重试（网络相关错误），使用实例成员避免跨worker共享
     const int maxRetries = 3;
-    
-    if (retryCount < maxRetries && 
+
+    if (m_retryCount < maxRetries &&
         (code == QNetworkReply::ConnectionRefusedError ||
          code == QNetworkReply::RemoteHostClosedError ||
          code == QNetworkReply::TimeoutError ||
          code == QNetworkReply::TemporaryNetworkFailureError)) {
-        
-        retryCount++;
-        LOGD(QString("网络错误，尝试第%1次重试...").arg(retryCount));
-        
+
+        m_retryCount++;
+        LOGD(QString("网络错误，尝试第%1次重试...").arg(m_retryCount));
+
         // 清理当前资源
         if (m_reply) {
+            m_reply->disconnect(this); // 断开所有信号连接，避免重试期间再次回调
             m_reply->deleteLater();
             m_reply = nullptr;
         }
-        
+
         // 延迟重试
-        QTimer::singleShot(2000 * retryCount, this, [this]() {
-            if (!m_isStopped) {
+        QPointer<HttpWorker> safeThis(this);
+        QTimer::singleShot(2000 * m_retryCount, this, [safeThis]() {
+            if (safeThis && !safeThis->m_isStopped) {
                 LOGD("执行重试下载");
-                startDownload();
+                safeThis->startDownload();
             }
         });
-        
+
         return;
     }
-    
+
     // 重置重试计数器
-    retryCount = 0;
-    
+    m_retryCount = 0;
+
     LOGD("发射错误信号并清理资源");
-    emit error(errorString);
+    if (!m_alreadyFinished) {
+        m_alreadyFinished = true;
+        emit error(errorString);
+    }
     cleanup();
     LOGD("onErrorOccurred处理完成");
 }

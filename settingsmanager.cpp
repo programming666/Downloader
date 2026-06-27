@@ -96,10 +96,19 @@ void SettingsManager::loadProxy(ProxyType& type, QNetworkProxy& proxy) const
     m_settings->beginGroup(GROUP_NETWORK);
     type = static_cast<ProxyType>(m_settings->value(KEY_PROXY_TYPE, NoProxy).toInt());
     if (type != SystemProxy) {
-        proxy.setHostName(m_settings->value(KEY_PROXY_HOST).toString());
-        proxy.setPort(m_settings->value(KEY_PROXY_PORT).toInt());
-        proxy.setUser(m_settings->value(KEY_PROXY_USER).toString());
-        proxy.setPassword(m_settings->value(KEY_PROXY_PASS).toString());
+        QString host = m_settings->value(KEY_PROXY_HOST).toString();
+        int port = m_settings->value(KEY_PROXY_PORT).toInt();
+        // 字段缺失或非法时不写入，避免下游 setProxy() 出现空主机/0 端口
+        if (!host.isEmpty() && port > 0 && port <= 65535) {
+            proxy.setType(static_cast<QNetworkProxy::ProxyType>(type));
+            proxy.setHostName(host);
+            proxy.setPort(static_cast<quint16>(port));
+            proxy.setUser(m_settings->value(KEY_PROXY_USER).toString());
+            proxy.setPassword(m_settings->value(KEY_PROXY_PASS).toString());
+        } else {
+            // 字段缺失时退回到 NoProxy，避免脏配置造成 setProxy 失败
+            type = NoProxy;
+        }
     }
     m_settings->endGroup();
 }
@@ -207,6 +216,10 @@ quint16 SettingsManager::loadLocalListenPort() const
     m_settings->beginGroup(GROUP_LOCAL_SERVER);
     quint16 port = m_settings->value(KEY_LOCAL_LISTEN_PORT, 8080).toUInt(); // 默认端口8080
     m_settings->endGroup();
+    // 端口必须位于 [1024, 65535] 之间（避开系统保留端口）
+    if (port < 1024 || port > 65535) {
+        port = 8080;
+    }
     return port;
 }
 

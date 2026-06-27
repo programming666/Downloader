@@ -8,6 +8,7 @@
 QJsonObject DownloadRecord::toJson() const
 {
     QJsonObject obj;
+    obj["id"] = id;
     obj["url"] = url;
     obj["filePath"] = filePath;
     obj["fileSize"] = QString::number(fileSize);
@@ -15,12 +16,15 @@ QJsonObject DownloadRecord::toJson() const
     obj["finishTime"] = finishTime.toString(Qt::ISODate);
     obj["status"] = status;
     obj["fileName"] = fileName;
+    obj["threadCount"] = threadCount;
     return obj;
 }
 
 DownloadRecord DownloadRecord::fromJson(const QJsonObject& json)
 {
     DownloadRecord record;
+    // 兼容历史数据：若不存在 id 字段，默认 0（将被 loadHistory 重新分配）
+    record.id = json.contains("id") ? json["id"].toInt() : 0;
     record.url = json["url"].toString();
     record.filePath = json["filePath"].toString();
     record.fileSize = json["fileSize"].toString().toLongLong();
@@ -28,6 +32,16 @@ DownloadRecord DownloadRecord::fromJson(const QJsonObject& json)
     record.finishTime = QDateTime::fromString(json["finishTime"].toString(), Qt::ISODate);
     record.status = json["status"].toString();
     record.fileName = json["fileName"].toString();
+    // 兼容历史数据：旧记录没有 threadCount 字段，默认为 0（显示为"未知"）
+    record.threadCount = json.contains("threadCount") ? json["threadCount"].toInt() : 0;
+
+    // 校验关键字段：时间字段在解析失败时给出无效值，避免下游访问异常。
+    if (!record.startTime.isValid()) {
+        record.startTime = QDateTime();
+    }
+    if (!record.finishTime.isValid()) {
+        record.finishTime = QDateTime();
+    }
     return record;
 }
 
@@ -41,6 +55,7 @@ DownloadRecord DownloadRecord::fromJson(const QJsonObject& json)
  */
 HistoryManager::HistoryManager(QObject *parent)
     : QObject(parent)
+    , m_nextId(0)
 {
     LOGD("开始构造HistoryManager");
     LOGD("调用initJsonFile()");
@@ -144,65 +159,88 @@ bool HistoryManager::initJsonFile()
 /**
  * @brief 从JSON文件加载历史记录
  * @return true 加载成功，false 加载失败
- * 
+ *
  * 如果JSON文件存在但格式错误，会清空文件并返回空列表
  */
 bool HistoryManager::loadHistory()
 {
     LOGD("[HistoryManager::loadHistory] 开始加载历史记录");
-    
+
+    QMutexLocker locker(&m_mutex);
+    return loadHistoryUnlocked();
+}
+
+/**
+ * @brief 不加锁版的加载历史记录。
+ * 调用方必须已经持有 m_mutex。
+ */
+bool HistoryManager::loadHistoryUnlocked()
+{
+    LOGD("[HistoryManager::loadHistoryUnlocked] 开始加载历史记录（不加锁）");
+
     QFile file(m_historyFilePath);
     if (!file.exists()) {
-        LOGD("[HistoryManager::loadHistory] JSON文件不存在，将创建新文件");
+        LOGD("[HistoryManager::loadHistoryUnlocked] JSON文件不存在，将创建新文件");
         m_records.clear();
+        m_nextId = 0;
         return true;
     }
-    
+
     if (!file.open(QIODevice::ReadOnly)) {
-        LOGD(QString("[HistoryManager::loadHistory] 无法打开JSON文件:%1").arg(file.errorString()));
+        LOGD(QString("[HistoryManager::loadHistoryUnlocked] 无法打开JSON文件:%1").arg(file.errorString()));
         // 无法打开文件时，清空文件内容
-        LOGD("[HistoryManager::loadHistory] 清空JSON文件内容");
+        LOGD("[HistoryManager::loadHistoryUnlocked] 清空JSON文件内容");
         file.close();
         m_records.clear();
-        saveHistory(); // 创建空的JSON文件
+        m_nextId = 0;
+        saveHistoryUnlocked(); // 创建空的JSON文件
         return true;
     }
-    
+
     QByteArray data = file.readAll();
     file.close();
-    
+
     // 如果文件为空，返回空列表
     if (data.isEmpty()) {
-        LOGD("[HistoryManager::loadHistory] JSON文件为空");
+        LOGD("[HistoryManager::loadHistoryUnlocked] JSON文件为空");
         m_records.clear();
+        m_nextId = 0;
         return true;
     }
-    
+
     QJsonDocument doc = QJsonDocument::fromJson(data);
     if (doc.isNull() || !doc.isArray()) {
-        LOGD("[HistoryManager::loadHistory] JSON文件格式错误或不是数组，将清空文件");
+        LOGD("[HistoryManager::loadHistoryUnlocked] JSON文件格式错误或不是数组，将清空文件");
         // 格式错误时，清空文件并返回空列表
         m_records.clear();
-        saveHistory(); // 创建空的JSON文件
+        m_nextId = 0;
+        saveHistoryUnlocked(); // 创建空的JSON文件
         return true;
     }
-    
+
     QJsonArray array = doc.array();
     m_records.clear();
-    
+    m_nextId = 0;
+
     for (const QJsonValue& value : array) {
         if (value.isObject()) {
             try {
                 DownloadRecord record = DownloadRecord::fromJson(value.toObject());
+                // 兼容老数据：旧记录没有 id 字段，按加载顺序补齐主键
+                if (record.id <= 0) {
+                    record.id = ++m_nextId;
+                } else if (record.id > m_nextId) {
+                    m_nextId = record.id;
+                }
                 m_records.append(record);
             } catch (...) {
-                LOGD("[HistoryManager::loadHistory] 解析记录失败，跳过该记录");
+                LOGD("[HistoryManager::loadHistoryUnlocked] 解析记录失败，跳过该记录");
                 continue;
             }
         }
     }
-    
-    LOGD(QString("[HistoryManager::loadHistory] 历史记录加载成功，共%1条记录").arg(m_records.size()));
+
+    LOGD(QString("[HistoryManager::loadHistoryUnlocked] 历史记录加载成功，共%1条记录").arg(m_records.size()));
     return true;
 }
 
@@ -213,23 +251,35 @@ bool HistoryManager::loadHistory()
 bool HistoryManager::saveHistory()
 {
     LOGD("[HistoryManager::saveHistory] 开始保存历史记录");
-    
+
+    QMutexLocker locker(&m_mutex);
+    return saveHistoryUnlocked();
+}
+
+/**
+ * @brief 不加锁版的保存历史记录。
+ * 调用方必须已经持有 m_mutex。
+ */
+bool HistoryManager::saveHistoryUnlocked()
+{
+    LOGD("[HistoryManager::saveHistoryUnlocked] 开始保存历史记录（不加锁）");
+
     QJsonArray array;
     for (const DownloadRecord& record : m_records) {
         array.append(record.toJson());
     }
-    
+
     QJsonDocument doc(array);
     QFile file(m_historyFilePath);
-    
+
     if (!file.open(QIODevice::WriteOnly)) {
         LOGD(QString("[HistoryManager::saveHistory] 无法打开JSON文件:%1").arg(file.errorString()));
         return false;
     }
-    
+
     file.write(doc.toJson());
     file.close();
-    
+
     LOGD(QString("[HistoryManager::saveHistory] 历史记录保存成功，共%1条记录").arg(m_records.size()));
     return true;
 }
@@ -259,23 +309,45 @@ bool HistoryManager::addRecord(const DownloadRecord& record)
     LOGD(QString("[HistoryManager::addRecord]   结束时间:%1").arg(record.finishTime.toString()));
     LOGD(QString("[HistoryManager::addRecord]   状态:%1").arg(record.status));
     LOGD(QString("[HistoryManager::addRecord]   文件名:%1").arg(record.fileName));
-    
-    // 添加到内存列表
-    m_records.append(record);
-    
-    // 保存到JSON文件
-    if (!saveHistory()) {
-        LOGD("[HistoryManager::addRecord] 保存历史记录失败");
-        m_records.removeLast(); // 回滚内存中的记录
-        return false;
+    LOGD(QString("[HistoryManager::addRecord]   线程数:%1").arg(record.threadCount));
+
+    // 写入磁盘前先复制一份待写入的记录，避免锁外读取被并发修改
+    DownloadRecord newRecord = record;
+    int oldCount = 0;
+    {
+        QMutexLocker locker(&m_mutex);
+        // 分配主键 id（按调用顺序自增）
+        if (newRecord.id <= 0) {
+            newRecord.id = ++m_nextId;
+        } else if (newRecord.id > m_nextId) {
+            m_nextId = newRecord.id;
+        }
+
+        oldCount = m_records.size();
+        m_records.append(newRecord);
+
+        // 保存到JSON文件（必须用 Unlocked 版本，避免 QMutex 不可重入导致死锁）
+        if (!saveHistoryUnlocked()) {
+            LOGD("[HistoryManager::addRecord] 保存历史记录失败");
+            // 回滚：使用 oldCount 精确回退，并回收主键（仅当回退的是本次插入的 id 时）
+            const int extra = m_records.size() - oldCount;
+            if (extra > 0) {
+                m_records.remove(oldCount, extra);
+            }
+            if (newRecord.id == m_nextId) {
+                --m_nextId;
+            }
+            return false;
+        }
     }
-    
-    LOGD(QString("[HistoryManager::addRecord] 记录添加成功，URL:%1").arg(record.url));
+
+    LOGD(QString("[HistoryManager::addRecord] 记录添加成功，URL:%1").arg(newRecord.url));
     return true;
 }
 
 QList<DownloadRecord> HistoryManager::getHistory() const
 {
+    QMutexLocker locker(&m_mutex);
     LOGD(QString("[HistoryManager::getHistory] 返回历史记录，共%1条记录").arg(m_records.size()));
     return m_records;
 }
@@ -288,38 +360,76 @@ QList<DownloadRecord> HistoryManager::getHistory() const
 bool HistoryManager::deleteRecord(int index)
 {
     LOGD(QString("[HistoryManager::deleteRecord] 开始删除历史记录，索引:%1").arg(index));
-    
-    if (index < 0 || index >= m_records.size()) {
-        LOGD(QString("[HistoryManager::deleteRecord] 索引超出范围:%1").arg(index));
-        return false;
+
+    {
+        QMutexLocker locker(&m_mutex);
+        if (index < 0 || index >= m_records.size()) {
+            LOGD(QString("[HistoryManager::deleteRecord] 索引超出范围:%1").arg(index));
+            return false;
+        }
+
+        // 先备份待删除的记录，保存失败时回滚
+        DownloadRecord removedItem = m_records.at(index);
+        m_records.removeAt(index);
+
+        // 保存到JSON文件（必须用 Unlocked 版本，避免 QMutex 不可重入导致死锁）
+        if (!saveHistoryUnlocked()) {
+            LOGD("[HistoryManager::deleteRecord] 保存历史记录失败，回滚内存");
+            // 回滚：将备份项插回原位置
+            if (index >= m_records.size()) {
+                m_records.append(removedItem);
+            } else {
+                m_records.insert(index, removedItem);
+            }
+            return false;
+        }
     }
-    
-    // 从内存列表中删除
-    m_records.removeAt(index);
-    
-    // 保存到JSON文件
-    if (!saveHistory()) {
-        LOGD("[HistoryManager::deleteRecord] 保存历史记录失败");
-        return false;
-    }
-    
+
     LOGD("[HistoryManager::deleteRecord] 历史记录删除成功");
     return true;
+}
+
+int HistoryManager::findIndexById(int id) const
+{
+    if (id <= 0) {
+        return -1;
+    }
+    QMutexLocker locker(&m_mutex);
+    for (int i = 0; i < m_records.size(); ++i) {
+        if (m_records[i].id == id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool HistoryManager::deleteRecordById(int id)
+{
+    int index = findIndexById(id);
+    if (index < 0) {
+        LOGD(QString("[HistoryManager::deleteRecordById] 未找到 id=%1 的记录").arg(id));
+        return false;
+    }
+    return deleteRecord(index);
 }
 
 bool HistoryManager::clearHistory()
 {
     LOGD("[HistoryManager::clearHistory] 开始清空历史记录");
-    
-    // 清空内存列表
-    m_records.clear();
-    
-    // 保存到JSON文件
-    if (!saveHistory()) {
-        LOGD("[HistoryManager::clearHistory] 保存历史记录失败");
-        return false;
+
+    {
+        QMutexLocker locker(&m_mutex);
+        // 清空内存列表
+        m_records.clear();
+        m_nextId = 0;
+
+        // 保存到JSON文件（必须用 Unlocked 版本，避免 QMutex 不可重入导致死锁）
+        if (!saveHistoryUnlocked()) {
+            LOGD("[HistoryManager::clearHistory] 保存历史记录失败");
+            return false;
+        }
     }
-    
+
     LOGD("[HistoryManager::clearHistory] 历史记录清空成功");
     return true;
 }

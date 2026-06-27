@@ -31,12 +31,23 @@ DownloadManager::DownloadManager(QObject *parent)
 DownloadManager::~DownloadManager()
 {
     LOGD(QString("开始销毁DownloadManager，当前任务数:%1").arg(m_tasks.size()));
-    
-    // 等待所有任务完成
-    LOGD("等待线程池中的任务完成...");
-    m_threadPool->waitForDone();
-    LOGD("线程池中的任务已全部完成");
-    
+
+    // 等待所有任务完成（带超时，避免永久阻塞）
+    LOGD("等待线程池中的任务完成（超时5秒）...");
+    if (!m_threadPool->waitForDone(5000)) {
+        LOGD("线程池等待超时，强制继续清理");
+    } else {
+        LOGD("线程池中的任务已全部完成");
+    }
+
+    // 清理所有 task 的信号连接，避免 deleteLater 之后还有回调触发
+    for (DownloadTask* task : m_tasks) {
+        if (task) {
+            task->disconnect(); // 断开 task 的所有信号
+            task->blockSignals(true);
+        }
+    }
+
     // QThreadPool的父对象是DownloadManager，会自动删除
     // m_tasks中的DownloadTask对象需要手动管理
     LOGD("开始删除所有任务对象...");

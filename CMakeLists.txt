@@ -1,16 +1,14 @@
 cmake_minimum_required(VERSION 3.19)
-# 设置Qt路径（根据实际安装路径修改）
-set(Qt6_DIR "D:/Qt/6.10.0/mingw_64/lib/cmake/Qt6")
+# 通过 CMAKE_PREFIX_PATH 或 Qt6_DIR 指定 Qt6 位置；示例：
+#   cmake -B build -DCMAKE_PREFIX_PATH=D:/Qt/6.10.0/mingw_64
 project(Downloader LANGUAGES CXX)
-# 打印调试信息
-message(STATUS "Qt6路径: ${Qt6_DIR}")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Network Gui Concurrent)
-# 检查Qt6是否支持HttpServer模块
-find_package(Qt6 COMPONENTS HttpServer REQUIRED)
+# 检查Qt6是否支持HttpServer模块（QUIET：不强制要求，不存在时回退到 QTcpServer 实现）
+find_package(Qt6 COMPONENTS HttpServer QUIET)
 if(TARGET Qt6::HttpServer)
     message(STATUS "找到Qt6 HttpServer模块")
     # 定义宏以启用QHttpServer

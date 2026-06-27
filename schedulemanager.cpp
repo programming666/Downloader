@@ -3,13 +3,14 @@
 #include <QTimer>
 #include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QDir>
 #include <QDebug>
-
-ScheduleManager* ScheduleManager::m_instance = nullptr;
 
 QJsonObject ScheduledTask::toJson() const
 {
@@ -56,15 +57,19 @@ ScheduleManager::ScheduleManager(QObject *parent) : QObject(parent)
 
 ScheduleManager::~ScheduleManager()
 {
+    // 停止定时器避免重复触发
+    if (m_timer) {
+        m_timer->stop();
+    }
     saveScheduledTasks();
 }
 
 ScheduleManager* ScheduleManager::instance()
 {
-    if (!m_instance) {
-        m_instance = new ScheduleManager();
-    }
-    return m_instance;
+    // 使用函数内 static 变量实现 Meyer's 单例：线程安全（C++11 起保证），
+    // 避免裸 new 导致的内存泄漏与析构顺序问题。
+    static ScheduleManager inst;
+    return &inst;
 }
 
 int ScheduleManager::addScheduledTask(const ScheduledTask& task)
@@ -108,9 +113,15 @@ void ScheduleManager::saveScheduledTasks()
     for (const auto& task : m_tasks) {
         tasksArray.append(task.toJson());
     }
-    
+
     QJsonDocument doc(tasksArray);
-    QFile file("scheduled_tasks.json");
+
+    // 使用 AppDataLocation 作为存储根目录，避免相对路径随工作目录漂移
+    QString filePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                       + QDir::separator() + "scheduled_tasks.json";
+    QDir().mkpath(QFileInfo(filePath).absolutePath());
+
+    QFile file(filePath);
     if (file.open(QIODevice::WriteOnly)) {
         file.write(doc.toJson());
         file.close();
@@ -119,24 +130,39 @@ void ScheduleManager::saveScheduledTasks()
 
 void ScheduleManager::loadScheduledTasks()
 {
-    QFile file("scheduled_tasks.json");
+    QString filePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                       + QDir::separator() + "scheduled_tasks.json";
+    QDir().mkpath(QFileInfo(filePath).absolutePath());
+
+    QFile file(filePath);
     if (!file.exists()) {
         return;
     }
-    
+
     if (file.open(QIODevice::ReadOnly)) {
-        QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+        QByteArray raw = file.readAll();
         file.close();
-        
-        if (doc.isArray()) {
-            QJsonArray array = doc.array();
-            for (const auto& value : array) {
-                if (value.isObject()) {
-                    ScheduledTask task = ScheduledTask::fromJson(value.toObject());
-                    m_tasks[task.id] = task;
-                    if (task.id >= m_nextTaskId) {
-                        m_nextTaskId = task.id + 1;
-                    }
+
+        QJsonParseError err{};
+        QJsonDocument doc = QJsonDocument::fromJson(raw, &err);
+        if (err.error != QJsonParseError::NoError || !doc.isArray()) {
+            // 解析失败时清空任务并保留原文件待人工排查，避免清空导致数据丢失
+            qWarning() << "[ScheduleManager::loadScheduledTasks] JSON parse failed:"
+                       << err.errorString();
+            m_tasks.clear();
+            m_nextTaskId = 1;
+            return;
+        }
+
+        m_tasks.clear();
+        m_nextTaskId = 1;
+        QJsonArray array = doc.array();
+        for (const auto& value : array) {
+            if (value.isObject()) {
+                ScheduledTask task = ScheduledTask::fromJson(value.toObject());
+                m_tasks[task.id] = task;
+                if (task.id >= m_nextTaskId) {
+                    m_nextTaskId = task.id + 1;
                 }
             }
         }
@@ -151,27 +177,30 @@ void ScheduleManager::onTimerTimeout()
 void ScheduleManager::checkScheduledTasks()
 {
     QDateTime now = QDateTime::currentDateTime();
-    
+
     for (auto it = m_tasks.begin(); it != m_tasks.end(); ++it) {
         ScheduledTask& task = it.value();
-        
+
         if (!task.isActive) {
             continue;
         }
-        
+
         // 检查任务是否到期
         if (task.scheduledTime <= now) {
             // 触发任务
             emit scheduledTaskTriggered(task);
-            
-            // 处理重复任务
+
+            // 处理重复任务：下一次触发时间由 handleRepeatTask 写入
             if (task.isRepeat) {
                 handleRepeatTask(task);
             } else {
-                // 非重复任务，标记为完成
-                task.isActive = false;
+                // 非重复任务：触发后直接从列表删除，避免重启后残留无效任务
+                int doneId = task.id;
+                it = m_tasks.erase(it);
+                --it; // erase 返回下一迭代器，先回退避免 ++it 时跳过
+                Q_UNUSED(doneId);
             }
-            
+
             // 保存更改
             saveScheduledTasks();
         }
@@ -180,7 +209,9 @@ void ScheduleManager::checkScheduledTasks()
 
 void ScheduleManager::handleRepeatTask(const ScheduledTask& task)
 {
-    // 更新下一次执行时间
+    // 更新下一次执行时间：以当前时间为基准，而不是原计划时间。
+    // 避免每次重复都基于最初计划时间累加，导致实际触发时间持续向后漂移
+    // （例如程序在任务到期一段时间后才被唤醒 / 检查定时器时已经过去较久）。
     ScheduledTask& mutableTask = m_tasks[task.id];
-    mutableTask.scheduledTime = task.scheduledTime.addSecs(task.repeatInterval * 3600);
+    mutableTask.scheduledTime = QDateTime::currentDateTime().addSecs(task.repeatInterval * 3600);
 }

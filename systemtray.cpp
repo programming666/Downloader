@@ -93,24 +93,15 @@ SystemTray::~SystemTray()
  */
 void SystemTray::createActions()
 {
-    LOGD("开始创建动作...");
-    
-    LOGD("开始创建显示动作...");
-    m_showAction = new QAction("显示主界面", this);
-    LOGD("显示动作创建完成");
-    
-    LOGD("开始创建退出动作...");
-    m_quitAction = new QAction("退出", this);
-    LOGD("退出动作创建完成");
-    
-    LOGD("开始连接动作信号...");
+    // 创建菜单项
+    m_showAction = new QAction(tr("显示主界面"), this);
+    m_quitAction = new QAction(tr("退出"), this);
+
+    // 连接信号槽
     connect(m_showAction, &QAction::triggered, this, &SystemTray::onShowMainWindow);
     connect(m_quitAction, &QAction::triggered, this, &SystemTray::onQuitApplication);
-    LOGD("动作信号连接完成");
-    
-    LOGD("动作创建完成");
-    
-    // 将动作添加到菜单
+
+    // 组装菜单
     m_trayMenu->addAction(m_showAction);
     m_trayMenu->addSeparator();
     m_trayMenu->addAction(m_quitAction);
@@ -172,11 +163,16 @@ void SystemTray::onShowMainWindow()
 
 /**
  * @brief 退出应用程序
- * 
- * 响应用户退出操作，终止整个应用程序
- * 调用QApplication::quit()触发应用程序正常退出流程
+ *
+ * 响应用户退出操作，终止整个应用程序。
+ * 通过调用主窗口的 requestQuit() 设置退出标志，
+ * 再触发 QApplication::quit() 退出事件循环。
  */
 void SystemTray::onQuitApplication()
 {
-    QApplication::quit();
+    if (m_mainWindow) {
+        QMetaObject::invokeMethod(m_mainWindow, "requestQuit");
+    } else {
+        QApplication::quit();
+    }
 }

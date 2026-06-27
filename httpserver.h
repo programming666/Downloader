@@ -2,6 +2,7 @@
 #define HTTPSERVER_H
 
 #include <QObject>
+#include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -83,7 +84,7 @@ private slots:
      * @brief 处理客户端断开连接。
      */
     void onClientDisconnected();
-    
+
     /**
      * @brief 解析HTTP请求并发送响应。
      * @param data HTTP请求数据
@@ -98,6 +99,8 @@ private:
     QList<QTcpServer*> m_tcpServers; ///< 绑定的TCP服务器列表。
 #else
     QTcpServer* m_tcpServer; ///< TCP服务器实例。
+    /// 按客户端 socket 缓存接收到的数据，用于按 Content-Length 拆包。
+    QHash<QTcpSocket*, QByteArray> m_buffers;
 #endif
 };
 
