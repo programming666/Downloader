@@ -109,7 +109,8 @@ private:
     QString m_filePath;             ///< 临时文件的路径。
     qint64 m_startPoint;            ///< 下载范围的起始点。
     qint64 m_endPoint;              ///< 下载范围的结束点。
-    std::atomic<qint64> m_bytesReceived;     ///< 已接收的字节数（原子类型，跨线程安全，支持>2GB文件）。
+    std::atomic<qint64> m_bytesReceived;     ///< 本会话已接收的字节数（原子类型，跨线程安全，支持>2GB文件）。
+    qint64 m_resumeOffset{0};       ///< 从磁盘续传时检测到的已有字节数（仅一次设置，避免 m_bytesReceived 语义混淆）。
 
     QNetworkAccessManager* m_netManager; ///< 网络访问管理器。
     QNetworkReply* m_reply;         ///< 网络应答。
