@@ -8,6 +8,8 @@
 #include <QLabel>
 #include <QCloseEvent>
 #include <QPointer>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QtConcurrent/QtConcurrent>
 #include <QFuture>
 #include <QFutureWatcher>
@@ -187,6 +189,16 @@ private slots:
      */
     void onUiUpdateTimerTimeout();
 
+    /**
+     * @brief 处理 File->Exit 菜单项（避免被 closeEvent 当作最小化到托盘）。
+     */
+    void on_actionExit_triggered();
+
+    /**
+     * @brief 根据当前选中的任务状态，启用/禁用暂停/取消/恢复等按钮。
+     */
+    void refreshSelectionActionStates();
+
 protected:
     /**
      * @brief 重写closeEvent，实现最小化到托盘。
@@ -207,12 +219,24 @@ private:
     HistoryManager& m_historyManager;   ///< 历史管理器实例，记录和管理下载历史
     SystemTray* m_systemTray;           ///< 系统托盘实例，提供后台运行和通知功能
     QTimer* m_uiUpdateTimer;            ///< UI更新定时器，用于节流频繁的UI更新
-    QSet<DownloadTask*> m_tasksToUpdate;///< 待更新UI的任务集合，用于批量更新任务状态
+    /// 待更新UI的任务集合，用于批量更新任务状态。
+    /// 用 QPointer 包装，task 可能在 UI 刷新前被 deleteLater；遍历前判空。
+    QSet<QPointer<DownloadTask>> m_tasksToUpdate;
+    QHash<QPointer<DownloadTask>, qint64> m_lastLoggedProgress;///< 进度日志节流（每 10% 记一次）
+    QMutex m_tableMutex;                ///< 保护表格行增删改与 m_tasksToUpdate 的并发访问
     QPointer<QProgressDialog> m_pauseProgress; ///< 暂停操作进度对话框，显示批量暂停进度
     QTranslator* m_translator;          ///< 翻译器实例指针（QTranslator 禁用了拷贝/移动赋值，必须用指针）
     QString m_currentLanguage;          ///< 当前界面语言代码（"zh_CN"/"en_US"）
     bool m_quitting = false;            ///< 是否正在退出程序，用于区分最小化到托盘和真正退出
     int m_uiIdleTicks = 0;              ///< UI更新定时器空闲计数，连续多次无任务时停止定时器
+
+public:
+    /// 让 QSet<QPointer<DownloadTask>> 能放进 QHash/QSet：QHash 默认要求 qHash 重载。
+    /// 用 inline friend 定义在类内，避免在全局命名空间污染；同时不会引发 ODR 冲突。
+    friend size_t qHash(const QPointer<DownloadTask>& key, size_t seed = 0) noexcept
+    {
+        return qHash(key.data(), seed);
+    }
 
     // 新建任务后启动延迟：避免同步阻塞 UI
     static constexpr int kTaskStartDelayMs = 100;

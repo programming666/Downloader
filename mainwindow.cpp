@@ -145,38 +145,58 @@ void MainWindow::initUI()
 
 void MainWindow::loadStyleSheet(const QString& themeName)
 {
+    QString styleSheet;
+    bool loaded = false;
+
     // 首先尝试从资源文件加载
     QFile file(QString(":/styles/%1.qss").arg(themeName));
     if (file.open(QFile::ReadOnly | QFile::Text)) {
-        QString styleSheet = file.readAll();
-        qApp->setStyleSheet(styleSheet);
+        styleSheet = file.readAll();
         file.close();
         qDebug() << "Loaded theme from resources:" << themeName;
-        return;
+        loaded = true;
     }
-    
+
     // 如果资源文件加载失败，尝试从应用程序目录加载
-    QString appDir = QCoreApplication::applicationDirPath();
-    QFile absoluteFile(appDir + "/styles/" + themeName + ".qss");
-    if (absoluteFile.open(QFile::ReadOnly | QFile::Text)) {
-        QString styleSheet = absoluteFile.readAll();
-        qApp->setStyleSheet(styleSheet);
-        absoluteFile.close();
-        qDebug() << "Loaded theme from application directory:" << themeName;
-        return;
+    if (!loaded) {
+        QString appDir = QCoreApplication::applicationDirPath();
+        QFile absoluteFile(appDir + "/styles/" + themeName + ".qss");
+        if (absoluteFile.open(QFile::ReadOnly | QFile::Text)) {
+            styleSheet = absoluteFile.readAll();
+            absoluteFile.close();
+            qDebug() << "Loaded theme from application directory:" << themeName;
+            loaded = true;
+        }
     }
-    
+
     // 如果都失败了，尝试从当前工作目录加载
-    QFile currentDirFile("styles/" + themeName + ".qss");
-    if (currentDirFile.open(QFile::ReadOnly | QFile::Text)) {
-        QString styleSheet = currentDirFile.readAll();
-        qApp->setStyleSheet(styleSheet);
-        currentDirFile.close();
-        qDebug() << "Loaded theme from current directory:" << themeName;
+    if (!loaded) {
+        QFile currentDirFile("styles/" + themeName + ".qss");
+        if (currentDirFile.open(QFile::ReadOnly | QFile::Text)) {
+            styleSheet = currentDirFile.readAll();
+            currentDirFile.close();
+            qDebug() << "Loaded theme from current directory:" << themeName;
+            loaded = true;
+        }
+    }
+
+    if (!loaded) {
+        qWarning() << "Failed to load theme:" << themeName;
         return;
     }
-    
-    qWarning() << "Failed to load stylesheet for theme:" << themeName << "tried all paths";
+
+    qApp->setStyleSheet(styleSheet);
+
+    // 把样式表也应用到所有已存在的顶层 widget（含打开着的对话框）。
+    // qApp->setStyleSheet 只会影响后续构造的 widget，已存在的不会重新计算样式，
+    // 需要对每个 widget 先清空再重新设置一次才能生效。
+    const QWidgetList topLevels = QApplication::topLevelWidgets();
+    for (QWidget* w : topLevels) {
+        if (!w || w == this) continue;
+        QString old = w->styleSheet();
+        w->setStyleSheet(QString());
+        w->setStyleSheet(old.isEmpty() ? styleSheet : old);
+    }
 }
 
 QString MainWindow::formatBytes(qint64 bytes) const
@@ -649,39 +669,40 @@ void MainWindow::on_actionPauseSelected_triggered()
     }
 
     // 创建进度对话框
-    m_pauseProgress = new QProgressDialog(tr("正在暂停选中的任务..."), 
-                                        tr("取消"), 
-                                        0, 
-                                        tasksToStop.size(), 
+    m_pauseProgress = new QProgressDialog(tr("正在暂停选中的任务..."),
+                                        tr("取消"),
+                                        0,
+                                        tasksToStop.size(),
                                         this);
     m_pauseProgress->setWindowModality(Qt::WindowModal);
     m_pauseProgress->setAttribute(Qt::WA_DeleteOnClose);
     m_pauseProgress->show();
-    
-    // 使用QtConcurrent实现并行暂停
-    auto pauseOperation = [](DownloadTask* task) {
-        if (task) task->pause();
-    };
-    
-    // 创建并配置FutureWatcher
-    QFutureWatcher<void>* watcher = new QFutureWatcher<void>(this);
-    connect(watcher, &QFutureWatcher<void>::progressRangeChanged,
-            m_pauseProgress, &QProgressDialog::setRange);
-    connect(watcher, &QFutureWatcher<void>::progressValueChanged,
-            m_pauseProgress, &QProgressDialog::setValue);
-    connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher]() {
-        if (m_pauseProgress) m_pauseProgress->accept();
-        watcher->deleteLater();
-    });
-    
-    // 启动并行任务
-    QFuture<void> future = QtConcurrent::map(tasksToStop, pauseOperation);
-    watcher->setFuture(future);
-    
-    // 连接取消信号
-    connect(m_pauseProgress, &QProgressDialog::canceled, this, [watcher]() {
-        watcher->cancel();
-    });
+
+    // 原来的 QtConcurrent::map 会让 lambda 在线程池里与表格行变更并发，
+    // 引发 QTableWidgetItem 写入竞争。这里改成同步循环：UI 暂停期间无新写入，
+    // 通过 QMutexLocker 短暂持有 m_tableMutex 防止重入；进度条仍能反映进度。
+    int done = 0;
+    bool cancelled = false;
+    for (DownloadTask* task : tasksToStop) {
+        if (m_pauseProgress && m_pauseProgress->wasCanceled()) {
+            cancelled = true;
+            break;
+        }
+        {
+            QMutexLocker locker(&m_tableMutex);
+            if (task) task->pause();
+        }
+        ++done;
+        if (m_pauseProgress) m_pauseProgress->setValue(done);
+    }
+    if (m_pauseProgress) {
+        m_pauseProgress->setValue(tasksToStop.size());
+        if (!cancelled) m_pauseProgress->accept();
+    }
+    Q_UNUSED(cancelled);
+
+    // 暂停后刷新按钮可用性（避免选中已暂停的行时 Pause 仍可点的混乱）。
+    refreshSelectionActionStates();
 }
 
 void MainWindow::on_actionResumeSelected_triggered()
@@ -785,25 +806,31 @@ void MainWindow::onTaskStatusChanged(DownloadTaskStatus status)
 
 void MainWindow::onTaskProgressUpdated(qint64 bytesReceived, qint64 totalBytes, qint64 speed)
 {
-    DownloadTask* task = qobject_cast<DownloadTask*>(sender());
-    if (task) {
-        // 为了避免日志过多，只在特定条件下记录进度日志
-        static QHash<DownloadTask*, qint64> lastLoggedProgress;
+    DownloadTask* raw = qobject_cast<DownloadTask*>(sender());
+    QPointer<DownloadTask> safeTask(raw);
+    if (safeTask) {
+        DownloadTask* task = safeTask.data();
+        // 进度日志节流：每 10% 记录一次（用成员 m_lastLoggedProgress 替代原来的 static QHash，
+        // 避免 static 跨实例共享并防止退出时泄漏）。
         int currentProgress = task->progressPercentage();
-        
-        if (!lastLoggedProgress.contains(task) || 
-            currentProgress - lastLoggedProgress[task] >= 10) { // 每10%记录一次
+
+        QPointer<DownloadTask> key(task);
+        qint64 last = m_lastLoggedProgress.value(key, -1);
+        if (last < 0 || currentProgress - last >= 10) {
             LOGD(QString("任务进度更新 - 文件:%1 进度:%2% 已接收:%3 总大小:%4 速度:%5")
                  .arg(task->fileName())
                  .arg(currentProgress)
                  .arg(bytesReceived)
                  .arg(totalBytes)
                  .arg(speed));
-            lastLoggedProgress[task] = currentProgress;
+            m_lastLoggedProgress.insert(key, currentProgress);
         }
-        
-        m_tasksToUpdate.insert(task);
+
         // 收到进度回调时确保定时器是运行的（防止上面 stop 后没有重新启动）
+        {
+            QMutexLocker locker(&m_tableMutex);
+            m_tasksToUpdate.insert(safeTask);
+        }
         if (!m_uiUpdateTimer->isActive()) {
             m_uiIdleTicks = 0;
             m_uiUpdateTimer->start(200);
@@ -875,20 +902,78 @@ void MainWindow::onThemeChanged(const QString& themeName)
     loadStyleSheet(themeName);
 }
 
+void MainWindow::on_actionExit_triggered()
+{
+    // File->Exit 必须真的退出程序：标记 m_quitting，让 closeEvent 接受关闭事件。
+    // 默认 Qt Designer 把 actionExit 自动连接到 close()，会先被 closeEvent 拦截成"最小化到托盘"。
+    // 由本槽显式接管：先标记再调用 close()，从而保证退出意图生效。
+    m_quitting = true;
+    close();
+}
+
+void MainWindow::refreshSelectionActionStates()
+{
+    // 根据当前选中的任务状态启用/禁用 暂停/恢复/取消 按钮：
+    // 选中至少一个 Downloading 任务 → Pause 启用；
+    // 选中至少一个 Paused 任务       → Resume 启用；
+    // 选中至少一个可取消（Downloading/Paused/Pending/Failed）的任务 → Cancel 启用。
+    if (!ui || !ui->tableWidget) return;
+    const QList<QTableWidgetItem*> selected = ui->tableWidget->selectedItems();
+    bool canPause = false, canResume = false, canCancel = false;
+    QSet<int> seen;
+    for (QTableWidgetItem* it : selected) {
+        int row = it->row();
+        if (seen.contains(row)) continue;
+        seen.insert(row);
+        QTableWidgetItem* col0 = ui->tableWidget->item(row, 0);
+        if (!col0) continue;
+        DownloadTask* task = col0->data(Qt::UserRole).value<DownloadTask*>();
+        if (!task) continue;
+        switch (task->status()) {
+            case DownloadTaskStatus::Downloading: canPause = true; canCancel = true; break;
+            case DownloadTaskStatus::Paused:      canResume = true; canCancel = true; break;
+            case DownloadTaskStatus::Pending:     canCancel = true; break;
+            case DownloadTaskStatus::Failed:      canCancel = true; break;
+            default: break;
+        }
+    }
+    if (ui->actionPauseSelected)   ui->actionPauseSelected->setEnabled(canPause);
+    if (ui->actionResumeSelected)  ui->actionResumeSelected->setEnabled(canResume);
+    if (ui->actionCancelSelected)  ui->actionCancelSelected->setEnabled(canCancel);
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    // 如果是程序主动退出（托盘退出等），直接接受关闭事件
+    // 如果是程序主动退出（托盘退出/File->Exit），直接接受关闭事件
     if (m_quitting) {
         event->accept();
         return;
     }
 
-    if (m_systemTray && m_systemTray->isVisible()) {
+    // 只有当存在正在下载/暂停的任务时，才允许最小化到托盘；
+    // 否则按"用户关闭窗口"直接退出，避免历史遗留"按 X 永远不退出"的体验。
+    bool hasActive = false;
+    if (ui && ui->tableWidget) {
+        QMutexLocker locker(&m_tableMutex);
+        for (int row = 0; row < ui->tableWidget->rowCount(); ++row) {
+            QTableWidgetItem* col0 = ui->tableWidget->item(row, 0);
+            if (!col0) continue;
+            DownloadTask* task = col0->data(Qt::UserRole).value<DownloadTask*>();
+            if (task) {
+                const auto st = task->status();
+                if (st == DownloadTaskStatus::Downloading || st == DownloadTaskStatus::Paused) {
+                    hasActive = true; break;
+                }
+            }
+        }
+    }
+
+    if (hasActive && m_systemTray && m_systemTray->isVisible()) {
         hide(); // 隐藏主窗口
         showSystemNotification(tr("下载器正在后台运行"), tr("点击图标可恢复窗口。"), QSystemTrayIcon::Information);
         event->ignore(); // 忽略关闭事件，阻止程序退出
     } else {
-        // 如果没有托盘图标或者用户选择退出，则正常关闭
+        // 没有活跃任务或没有托盘，按 X 就直接退出
         event->accept();
     }
 }
@@ -1037,38 +1122,41 @@ void MainWindow::updateLanguageMenu()
  */
 void MainWindow::onUiUpdateTimerTimeout()
 {
-    if (m_tasksToUpdate.isEmpty()) {
-        // 连续多次无任务时停止定时器，避免空转
-        if (++m_uiIdleTicks >= 3 && m_uiUpdateTimer->isActive()) {
-            m_uiUpdateTimer->stop();
-            m_uiIdleTicks = 3;
+    // 取出本轮需要刷新的任务，复制出来以避免与 producer（progressUpdated 等信号）的写入并发。
+    // 用 QPointer 是因为 task 可能在 set 取出到 update 之间被 deleteLater（task 完成/取消路径）。
+    QSet<QPointer<DownloadTask>> snapshot;
+    {
+        QMutexLocker locker(&m_tableMutex);
+        if (m_tasksToUpdate.isEmpty()) {
+            if (++m_uiIdleTicks >= 3 && m_uiUpdateTimer->isActive()) {
+                m_uiUpdateTimer->stop();
+                m_uiIdleTicks = 3;
+            }
+            return;
         }
-        return;
+        snapshot = m_tasksToUpdate;
+        m_tasksToUpdate.clear();
     }
     m_uiIdleTicks = 0;
 
-    // 批量更新
-    for (DownloadTask* task : std::as_const(m_tasksToUpdate)) {
-        if (task) {
-            updateTaskInTable(task);
+    // 批量更新；任务可能在 update 期间被销毁，updateTaskInTable 自身需有 QPointer 守卫。
+    DownloadTask* lastActiveTask = nullptr;
+    for (const QPointer<DownloadTask>& p : std::as_const(snapshot)) {
+        DownloadTask* task = p.data();
+        if (!task) continue; // 已 deleteLater，跳过
+        updateTaskInTable(task);
+        if (task->status() == DownloadTaskStatus::Downloading) {
+            lastActiveTask = task;
         }
     }
 
     // 更新状态栏（只显示最后一个活动任务的信息）
-    DownloadTask* lastActiveTask = nullptr;
-    for (DownloadTask* task : std::as_const(m_tasksToUpdate)) {
-        if (task && task->status() == DownloadTaskStatus::Downloading) {
-            lastActiveTask = task;
-        }
-    }
     if (lastActiveTask) {
         ui->statusbar->showMessage(tr("下载中：%1 - %2% (%3/s)")
                                    .arg(lastActiveTask->fileName())
                                    .arg(lastActiveTask->progressPercentage())
                                    .arg(formatSpeed(lastActiveTask->downloadSpeed())));
     }
-
-    m_tasksToUpdate.clear();
 }
 
 /**

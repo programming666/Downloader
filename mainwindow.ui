@@ -272,7 +272,7 @@
    <sender>actionExit</sender>
    <signal>triggered()</signal>
    <receiver>MainWindow</receiver>
-   <slot>close()</slot>
+   <slot>on_actionExit_triggered()</slot>
    <hints>
     <hint type="sourcelabel">
      <x>-1</x>
