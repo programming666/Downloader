@@ -1,0 +1,227 @@
+/* release-page/style.css
+ *
+ * Single source of truth for every selector used in index.html. The previous
+ * version duplicated several class definitions (e.g. .btn was redefined at
+ * the bottom of the file); those have been merged into single canonical
+ * declarations below.
+ */
+
+:root {
+    --bg: #f7f7f8;
+    --fg: #1f2328;
+    --muted: #57606a;
+    --accent: #0969da;
+    --accent-fg: #ffffff;
+    --border: #d0d7de;
+    --code-bg: #f0f0f0;
+    --max-width: 880px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Microsoft YaHei", sans-serif;
+    line-height: 1.55;
+    color: var(--fg);
+    background: var(--bg);
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a:hover,
+a:focus {
+    text-decoration: underline;
+}
+
+/* ----- hero ----- */
+.hero {
+    background: linear-gradient(180deg, #0d1117 0%, #1f2328 100%);
+    color: #ffffff;
+    padding: 64px 16px 56px;
+    text-align: center;
+}
+
+.hero h1 {
+    margin: 0 0 8px;
+    font-size: 2.4rem;
+    letter-spacing: 0.5px;
+}
+
+.tagline {
+    margin: 0 0 4px;
+    font-size: 1.1rem;
+    opacity: 0.92;
+}
+
+.version {
+    margin: 0 0 28px;
+    color: #c9d1d9;
+    font-size: 0.95rem;
+}
+
+.cta {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+/* ----- generic .btn (single canonical definition) -----
+ * Size modifier: .btn.small — used by the copy button.
+ * Variant modifier: .btn.primary — used for the primary CTA.
+ */
+.btn {
+    display: inline-block;
+    padding: 10px 18px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: #ffffff;
+    color: var(--fg);
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 120ms ease, transform 60ms ease;
+}
+
+.btn:hover,
+.btn:focus {
+    text-decoration: none;
+    background: #f0f0f0;
+}
+
+.btn:active {
+    transform: translateY(1px);
+}
+
+.btn.primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: var(--accent);
+}
+
+.btn.primary:hover,
+.btn.primary:focus {
+    background: #0860c7;
+    border-color: #0860c7;
+}
+
+.btn.small {
+    padding: 4px 10px;
+    font-size: 0.85rem;
+}
+
+/* ----- main content ----- */
+main {
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 32px 16px;
+}
+
+section {
+    margin-bottom: 48px;
+}
+
+h2 {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+    margin-top: 0;
+}
+
+.feature-grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+}
+
+.feature-grid li {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+}
+
+.feature-grid h3 {
+    margin: 0 0 6px;
+    font-size: 1.05rem;
+}
+
+.feature-grid p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.95rem;
+}
+
+/* ----- install steps ----- */
+.install ol {
+    padding-left: 22px;
+}
+
+.install code,
+.copy code {
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.95em;
+}
+
+.note {
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+/* ----- copy row ----- */
+.copy-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin: 0;
+}
+
+.copy-row code {
+    flex: 1 1 auto;
+    background: transparent;
+    padding: 0;
+    word-break: break-all;
+}
+
+/* ----- footer ----- */
+footer {
+    border-top: 1px solid var(--border);
+    text-align: center;
+    padding: 24px 16px;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+footer p {
+    margin: 4px 0;
+}
+
+/* ----- small screens ----- */
+@media (max-width: 480px) {
+    .hero h1 {
+        font-size: 1.9rem;
+    }
+
+    .tagline {
+        font-size: 1rem;
+    }
+}

@@ -1,4 +1,19 @@
-/* 深色主题样式 */
+/* 深色主题样式
+ *
+ * Selector policy:
+ *   - All selectors are class-based (e.g. QPushButton, QTableWidget) — they
+ *     apply to every instance of the widget in the application.
+ *   - No objectName selectors (#name) are used; nothing in mainwindow.cpp /
+ *     mainwindow.ui calls setObjectName(), so any ID selector would silently
+ *     never match.
+ *   - No qproperty-* selectors are used. Modern Qt 6 still accepts the
+ *     qproperty-<name>: <value> form (introduced in Qt 5.5), but we don't
+ *     need it: the colour variables below give us enough control.
+ *
+ * Maintainers: when adding new rules, prefer class selectors. If you need a
+ * single-instance override, add setObjectName() in C++ first, then introduce
+ * a QWidget#name rule here.
+ */
 QMainWindow {
     background-color: #121212;
 }

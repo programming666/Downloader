@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<!--
+  release-page/index.html — static download portal for Downloader.
+  Served from GitHub Pages (or any static host).
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!--
+      CSP: default-src 'self' keeps external requests locked down. script-src
+      'self' allows the inline-free script.js. style-src needs 'unsafe-inline'
+      for the small inline <style> blocks used for hero SVG backgrounds.
+      connect-src 'self' ensures clipboard API calls remain same-origin.
+    -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Downloader — a Qt6-based multithreaded download manager with HTTP/HTTPS, Range/resume, browser-plugin hand-off, system tray, and dark/light themes.">
+    <!-- TODO(favicon): drop a favicon.png next to index.html and replace the inline empty data: URL below. -->
+    <link rel="icon" href="data:,">
+    <title>Downloader — Qt6 Multithreaded Download Manager</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header class="hero">
+        <div class="hero-inner">
+            <h1>Downloader</h1>
+            <p class="tagline">A fast, multithreaded download manager for Windows — built on Qt 6 &amp; MinGW.</p>
+            <p class="version">Current release: <strong>0.1.0</strong> · <a href="https://github.com/programming666/Downloader/releases" rel="noopener">Release notes</a></p>
+            <div class="cta">
+                <!--
+                  TODO(release-links): replace the `latest` placeholder with the
+                  real asset names once the first GitHub release is published.
+                  Until then these links 404 — UI is intentionally still wired up
+                  so the layout is testable.
+                -->
+                <a class="btn primary" href="https://github.com/programming666/Downloader/releases/latest" rel="noopener">
+                    Download for Windows
+                </a>
+                <a class="btn" href="https://github.com/programming666/Downloader" rel="noopener">Source on GitHub</a>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <section class="features">
+            <h2>Features</h2>
+            <ul class="feature-grid">
+                <li>
+                    <h3>Multithreaded downloads</h3>
+                    <p>Split any HTTP/HTTPS resource into N range-requests and merge at the end. Configurable thread count.</p>
+                </li>
+                <li>
+                    <h3>Resume on failure</h3>
+                    <p>Interrupted downloads pick up where they left off — Range-aware servers send only the missing bytes.</p>
+                </li>
+                <li>
+                    <h3>Browser hand-off</h3>
+                    <p>Chrome / Edge Manifest V3 extension redirects downloads to a local HTTP endpoint and pre-fills the new-task dialog.</p>
+                </li>
+                <li>
+                    <h3>Tray &amp; scheduling</h3>
+                    <p>Minimize to system tray; queue timed downloads that fire on a schedule.</p>
+                </li>
+                <li>
+                    <h3>Dark / light themes</h3>
+                    <p>Switch from the menu — QSS-driven, no restart required.</p>
+                </li>
+                <li>
+                    <h3>EN / 中文 UI</h3>
+                    <p>Full Chinese and English translations, switched at runtime.</p>
+                </li>
+            </ul>
+        </section>
+
+        <section class="install">
+            <h2>Install on Windows</h2>
+            <ol>
+                <li>Download the installer above (<code>DownloaderInstaller.exe</code>).</li>
+                <li>Right-click → <em>Run as administrator</em> if Windows prompts.</li>
+                <li>Pick an install folder (default: <code>%USERPROFILE%\Downloader</code>).</li>
+                <li>Launch from the Start menu or the desktop shortcut.</li>
+            </ol>
+            <p class="note">
+                The installer is produced by the Qt Installer Framework. If Windows SmartScreen blocks
+                the binary, choose <em>More info → Run anyway</em> — the project is open-source and
+                reproducible from source.
+            </p>
+        </section>
+
+        <section class="copy">
+            <h2>Copy install command</h2>
+            <p class="copy-row">
+                <code id="installCmd">winget install --id=Programming666.Downloader -e</code>
+                <button id="copyBtn" type="button" class="btn small">Copy</button>
+            </p>
+            <p class="note">
+                TODO(winget): publish to winget-pkgs once the first stable release ships — until then
+                the command is shown for preview only.
+            </p>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2026 Programming666 · Released under the terms of the project license.</p>
+        <p>
+            <a href="https://github.com/programming666/Downloader" rel="noopener">GitHub</a> ·
+            <a href="https://github.com/programming666/Downloader/issues" rel="noopener">Issues</a>
+        </p>
+    </footer>
+
+    <script src="script.js" defer></script>
+</body>
+</html>
