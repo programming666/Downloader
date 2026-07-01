@@ -36,7 +36,37 @@ build/
 .cache/
 
 # cmake files
-CmakeLists.txt.user
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+_deps/
+
+# Qt generated files
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+.qmake.stash
+*.pro.user*
+
+# Backup / temp / editor swap files
+*.bak
+*.tmp
+*.orig
+*.swp
+*.swo
+*~
+
+# Editor / IDE folders
+.vscode/
+.idea/
+*.code-workspace
+
+# OS metadata
+.DS_Store
+Thumbs.db
 
 installer/
-release-page/

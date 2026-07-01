@@ -35,9 +35,10 @@ Downloader/
 
 ## 🎨 界面截图
 
-> 抱歉，由于代码质量太低，我们不好意思放截图
-> 
-> 不过你可以自己编译运行看看，界面还算能看
+> 当前 README 不内嵌截图。运行 `cmake --build build` 后启动可执行文件，
+> 界面位于主窗口表格中（`mainwindow.ui` 定义列：文件名 / 大小 / 进度 / 速度 / 状态 / 操作）。
+>
+> 占位符：后续可在此处追加 `docs/screenshots/main.png` 等素材。
 
 ## 🔧 编译说明
 
@@ -56,6 +57,12 @@ mkdir build
 
 # 2. 配置项目（祈祷CMake能找到Qt）
 ```
+
+> 构建说明：CMake 通过 `find_package(Qt6 ...)` 自动定位 Qt；如果 Qt 装在
+> 非默认位置，可通过 `cmake -DCMAKE_PREFIX_PATH=D:/Qt/6.10.0/mingw_64 ..`
+> 显式指定。`translations/*.ts` 文件由 `qt_add_translations()` 在构建时
+> 自动编译为 `*.qm`，无需手动跑 `lrelease`。
+
 （说实话我也不记得我怎么干的了，所以推荐：**下载QT，然后安装，然后打开QT Creator,然后打开项目（不保证QT能成功安装而且读取CmakeLists.txt）**）
 ```bash
 # 3. 编译（如果出错，请默念"屎山代码"三遍）
@@ -79,7 +86,7 @@ cmake --build build
 - **浏览器集成**：通过本地服务器接收下载请求
 - **主题切换**：支持深色/浅色主题
 - **系统托盘**：最小化到系统托盘（流氓软件必备）
-- **下载历史**：SQLite数据库存储历史记录（好了骗你的用不了）
+- **下载历史**：JSON 文件存储历史记录（参见 `historymanager.cpp`）
 
 ### ⚠️ 偶尔（？）出问题的功能
 

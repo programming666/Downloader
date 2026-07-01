@@ -1,3 +1,7 @@
-log_path=D:/LOG/downloader.log
-log_level=INFO
-append=true
+# Logger configuration for Downloader.
+# Empty values fall back to logger.h defaults (cross-platform: AppDataLocation).
+
+[log_path]
+# Path to the log file. Leave empty to let the application pick a writable
+# per-user location (recommended for portability).
+log_path=

@@ -1,2 +1,62 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize line endings (Windows host, CRLF convention for Qt projects).
+# `text=auto` lets git autodetect; `eol=crlf` ensures checkout uses CRLF on
+# Windows while internal git diffs stay sane.
+* text=auto eol=crlf
+
+# Source files we know are text and want CRLF on Windows checkout.
+*.cpp text eol=crlf
+*.h   text eol=crlf
+*.c   text eol=crlf
+*.ui  text eol=crlf
+*.qrc text eol=crlf
+*.qss text eol=crlf
+*.ts  text eol=crlf
+*.cmake text eol=crlf
+CMakeLists.txt text eol=crlf
+
+# Documentation
+*.md  text eol=crlf
+*.txt text eol=crlf
+LICENSE text eol=crlf
+
+# Scripts: keep CRLF for batch, LF for shell.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sh  text eol=lf
+
+# Web files
+*.html text eol=crlf
+*.css  text eol=crlf
+*.js   text eol=crlf
+*.json text eol=crlf
+*.xml  text eol=crlf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.ini  text eol=crlf
+
+# Binary / opaque asset files - never diff, never normalize.
+*.png binary
+*.ico  binary
+*.icns binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.bmp  binary
+*.qm   binary
+*.qrc_ binary
+*.gz   binary
+*.zip  binary
+*.7z   binary
+*.rar  binary
+*.tar  binary
+*.pdf  binary
+*.exe  binary
+*.dll  binary
+*.lib  binary
+*.a    binary
+*.so   binary
+*.dylib binary
+*.o    binary
+*.obj  binary
