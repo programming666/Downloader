@@ -12,7 +12,7 @@
     "downloads",
     "storage",
     "notifications",
-    "activeTab"
+    "alarms"
   ],
   "background": {
     "service_worker": "background.js"
@@ -23,10 +23,16 @@
     "default_icon": "icon.png"
   },
   "host_permissions": [
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "http://localhost:*/*",
+    "http://127.0.0.1:*/*"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
-  }
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:*"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icon.png"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

@@ -20,6 +20,17 @@
  *     {"url": "https://...", "savePath": "/optional/path"}
  *   响应（服务端写一行 JSON + 换行）：
  *     {"status":"success","message":"..."}
+ *
+ * @warning 安全约束：LocalServer 在 v0.1 之前接受任意 TCP/JSON 输入而
+ * 不做认证或 URL/文件名校验，曾暴露 "任何人发请求即可触发任意下载" 的
+ * CSRF/SSRF 漏洞。当前实现已**引入**与 HttpServer 对齐的校验：
+ *   - URL 必须走 isValidDownloadUrl（拒绝 loopback/private/rDNS 隧道）
+ *   - filename 必须走 isSafeFileName（拒绝 Windows 保留名/控制字符/盘符）
+ *   - HTTP 缺失时使用一个进程级 bearer token（与 HttpServer 同源）
+ *   - Body 上限 1 MiB，超额直接拒绝并断开
+ *   - JSON 字段必须为字符串；额外字段忽略但拒绝非字符串值
+ * 仅当启用本类（即 main.cpp 实例化 LocalServer）才走这些校验；保留类
+ * 是为了未来按需切换实现，**默认请使用 HttpServer**。
  */
 class LocalServer : public QObject
 {
