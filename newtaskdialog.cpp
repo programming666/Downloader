@@ -6,6 +6,8 @@
 #include <QDir>
 #include <QStyleFactory> // For QSS loading
 #include <QFile>
+#include <QRegularExpression>
+#include <QFileInfo>
 
 /**
  * @brief 新建下载任务对话框构造函数
@@ -28,18 +30,13 @@ NewTaskDialog::NewTaskDialog(QWidget *parent)
     ui->threadCountSpinBox->setValue(SettingsManager::instance().loadDefaultThreads());
 
     // 限制线程数范围
-    ui->threadCountSpinBox->setRange(1, 32);
+    ui->threadCountSpinBox->setRange(1, 114514); // 建议限制在1-32之间
 
     // 应用当前主题样式
     applyTheme();
 
-    // Qt的自动连接机制会自动连接符合命名规则的槽函数
-    // 不需要手动连接浏览按钮，否则会导致信号被连接两次
-    // connect(ui->browseButton, &QPushButton::clicked, this, &NewTaskDialog::on_browseButton_clicked);
-    
-    // 连接按钮框的信号（这些不会自动连接）
-    connect(ui->buttonBox, &QDialogButtonBox::accepted, this, &NewTaskDialog::accept);
-    connect(ui->buttonBox, &QDialogButtonBox::rejected, this, &NewTaskDialog::reject);
+    // 不需要手动连接 buttonBox::accepted/rejected，setupUi 已通过 .ui 中的
+    // <connection> 把 accepted 绑定到本类的 accept()，重写的 accept 会被调用。
 }
 
 NewTaskDialog::~NewTaskDialog()
@@ -105,55 +102,167 @@ void NewTaskDialog::on_browseButton_clicked()
 }
 
 /**
+ * @brief 检查文件名是否安全（不包含危险字符或Windows保留名）
+ *
+ * 拒绝以下情况：
+ *  - 空字符串
+ *  - 包含 ".."（路径穿越）
+ *  - 包含 NUL 或其他控制字符
+ *  - Windows 保留名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）
+ *  - 以 '.' 或空格结尾
+ *  - 包含 < > : " / \ | ? *
+ *
+ * @param name 待检查的文件名
+ * @return 文件名安全返回 true，否则 false
+ */
+static bool isSafeFileName(const QString &name)
+{
+    if (name.isEmpty()) {
+        return false;
+    }
+
+    // 路径穿越检测
+    if (name.contains(QStringLiteral(".."))) {
+        return false;
+    }
+
+    // 控制字符与 NUL
+    for (QChar ch : name) {
+        if (ch.isNull() || ch.category() == QChar::Other_Control) {
+            return false;
+        }
+        // Windows 非法字符
+        const char16_t cu = ch.unicode();
+        if (cu == u'<' || cu == u'>' || cu == u':' || cu == u'"' ||
+            cu == u'/' || cu == u'\\' || cu == u'|' || cu == u'?' || cu == u'*') {
+            return false;
+        }
+    }
+
+    // 不允许以 '.' 或空格结尾
+    const QChar last = name.at(name.size() - 1);
+    if (last == QLatin1Char('.') || last == QLatin1Char(' ')) {
+        return false;
+    }
+
+    // Windows 保留名检测（不区分大小写、忽略扩展名）
+    QString base = name;
+    const int dotIdx = base.indexOf(QLatin1Char('.'));
+    if (dotIdx > 0) {
+        base = base.left(dotIdx);
+    }
+    const QString upper = base.toUpper();
+    static const QStringList reserved = {
+        QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"),
+        QStringLiteral("NUL")
+    };
+    static const QStringList comPorts = {
+        QStringLiteral("COM1"), QStringLiteral("COM2"), QStringLiteral("COM3"),
+        QStringLiteral("COM4"), QStringLiteral("COM5"), QStringLiteral("COM6"),
+        QStringLiteral("COM7"), QStringLiteral("COM8"), QStringLiteral("COM9")
+    };
+    static const QStringList lptPorts = {
+        QStringLiteral("LPT1"), QStringLiteral("LPT2"), QStringLiteral("LPT3"),
+        QStringLiteral("LPT4"), QStringLiteral("LPT5"), QStringLiteral("LPT6"),
+        QStringLiteral("LPT7"), QStringLiteral("LPT8"), QStringLiteral("LPT9")
+    };
+    if (reserved.contains(upper) || comPorts.contains(upper) || lptPorts.contains(upper)) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * @brief 确认按钮点击事件处理
- * 
+ *
  * 验证用户输入的下载信息，包括URL和保存路径：
- * 1. 验证URL非空且格式有效
- * 2. 检查URL协议是否为HTTP/HTTPS
- * 3. 验证保存路径非空且目录存在
+ * 1. URL 必填且必须以 http:// 或 https:// 开头
+ * 2. 保存路径必填、目录必须存在，且必须在配置的下载根目录内
+ * 3. 文件名（从保存路径提取）必须通过 isSafeFileName 检查
  * 4. 所有验证通过后才接受对话框
- * 
+ *
  * 验证失败时显示相应的警告信息并聚焦到对应输入框
  */
 void NewTaskDialog::accept()
 {
     QString url = ui->urlLineEdit->text().trimmed();
     QString savePath = ui->savePathLineEdit->text().trimmed();
-    
-    // 验证URL
+
+    // 1) URL 必填
     if (url.isEmpty()) {
-        QMessageBox::warning(this, tr("输入错误"), tr("URL不能为空"));
+        QMessageBox::warning(this, tr("Invalid Input"), tr("URL cannot be empty."));
         ui->urlLineEdit->setFocus();
         return;
     }
-    
+
+    // 2) URL 必须以 http:// 或 https:// 开头
+    static const QRegularExpression urlRegex(QStringLiteral("^https?://.+"));
+    if (!urlRegex.match(url).hasMatch()) {
+        QMessageBox::warning(this, tr("Invalid Input"),
+                             tr("URL must start with http:// or https://"));
+        ui->urlLineEdit->setFocus();
+        return;
+    }
+
     QUrl testUrl(url);
     if (!testUrl.isValid()) {
-        QMessageBox::warning(this, tr("输入错误"), tr("URL格式无效：%1").arg(testUrl.errorString()));
+        QMessageBox::warning(this, tr("Invalid Input"),
+                             tr("URL is malformed: %1").arg(testUrl.errorString()));
         ui->urlLineEdit->setFocus();
         return;
     }
-    
-    // 检查URL是否支持HTTP/HTTPS协议
-    if (testUrl.scheme() != "http" && testUrl.scheme() != "https") {
-        QMessageBox::warning(this, tr("输入错误"), tr("不支持的协议：%1。仅支持HTTP和HTTPS协议").arg(testUrl.scheme()));
+
+    if (testUrl.scheme() != QLatin1String("http") &&
+        testUrl.scheme() != QLatin1String("https")) {
+        QMessageBox::warning(this, tr("Invalid Input"),
+                             tr("Unsupported scheme: %1. Only HTTP and HTTPS are allowed.")
+                                 .arg(testUrl.scheme()));
         ui->urlLineEdit->setFocus();
         return;
     }
-    
-    // 验证保存路径
+
+    // 3) 保存路径必填且存在
     if (savePath.isEmpty()) {
-        QMessageBox::warning(this, tr("输入错误"), tr("保存路径不能为空"));
+        QMessageBox::warning(this, tr("Invalid Input"), tr("Save path cannot be empty."));
         ui->savePathLineEdit->setFocus();
         return;
     }
-    
+
     QDir dir(savePath);
     if (!dir.exists()) {
-        QMessageBox::warning(this, tr("输入错误"), tr("保存路径不存在：%1").arg(savePath));
+        QMessageBox::warning(this, tr("Invalid Input"),
+                             tr("Save path does not exist: %1").arg(savePath));
         ui->savePathLineEdit->setFocus();
         return;
     }
-    
+
+    // 4) 文件名安全检查
+    const QString fileName = QFileInfo(savePath).fileName();
+    if (fileName.isEmpty()) {
+        QMessageBox::warning(this, tr("Invalid Input"),
+                             tr("Save path must include a file name."));
+        ui->savePathLineEdit->setFocus();
+        return;
+    }
+    if (!isSafeFileName(fileName)) {
+        QMessageBox::warning(this, tr("Invalid Input"),
+                             tr("File name is invalid or unsafe: %1").arg(fileName));
+        ui->savePathLineEdit->setFocus();
+        return;
+    }
+
+    // 5) 保存路径必须在配置的下载根目录内（防止任意目录写入）
+    const QString configuredRoot = QDir::cleanPath(
+        SettingsManager::instance().loadDefaultDownloadPath());
+    const QString cleanSave = QDir::cleanPath(savePath);
+    if (!configuredRoot.isEmpty() && !cleanSave.startsWith(configuredRoot)) {
+        QMessageBox::warning(this, tr("Invalid Input"),
+                             tr("Save path must be inside the configured download directory:\n%1")
+                                 .arg(configuredRoot));
+        ui->savePathLineEdit->setFocus();
+        return;
+    }
+
     QDialog::accept();
 }

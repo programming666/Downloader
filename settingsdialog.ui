@@ -219,7 +219,7 @@
       <enum>Qt::Orientation::Horizontal</enum>
      </property>
      <property name="standardButtons">
-      <set>QDialogButtonBox::StandardButton::Apply|QDialogButtonBox::StandardButton::Cancel</set>
+      <set>QDialogButtonBox::StandardButton::Ok|QDialogButtonBox::StandardButton::Apply|QDialogButtonBox::StandardButton::Cancel</set>
      </property>
     </widget>
    </item>

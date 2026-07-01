@@ -101,8 +101,25 @@ private slots:
      */
     void onBrowseButtonClicked();
 
+    /**
+     * @brief 重写 accept，在关闭前验证输入
+     */
+    void accept() override;
+
 private:
     Ui::ScheduleDialog *ui; ///< UI指针
+
+    /**
+     * @brief 验证当前 UI 输入，返回 true 表示通过
+     */
+    bool validateSchedule() const;
+
+    /**
+     * @brief 简单 cron 表达式校验：5 字段（分 时 日 月 周），每个字段范围合法。
+     * 支持 *, 数字, a-b, a-b/n, */n, 列表 a,b,c。
+     * @return 合法返回 true
+     */
+    static bool isValidCronExpression(const QString &expr);
 };
 
 #endif // SCHEDULEDIALOG_H
