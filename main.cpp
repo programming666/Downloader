@@ -1,6 +1,8 @@
 #include "mainwindow.h"
 #include "settingsmanager.h"
 #include "historymanager.h"
+#include "schedulemanager.h"
+#include "downloadmanager.h"
 #include "httpserver.h" // 包含HttpServer头文件
 #include "logger.h"
 
@@ -33,13 +35,26 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName("Programming666");
     QCoreApplication::setApplicationName("Downloader");
 
-    // 初始化SettingsManager和HistoryManager单例
-    // 确保在程序早期初始化，避免后续使用时的竞态条件
+    // 初始化单例管理器（按依赖顺序预热，避免后续使用时的竞态条件）
+    // 顺序：SettingsManager (基础) -> HistoryManager (依赖 settings) ->
+    //       ScheduleManager (依赖 settings) -> DownloadManager (依赖所有)
     SettingsManager::instance();
     HistoryManager::instance();
+    ScheduleManager::instance();
+    DownloadManager::instance();
 
     // 翻译器由 MainWindow 接管：MainWindow 构造时会根据系统语言加载并 install，
     // 后续用户切换语言也由 MainWindow 统一管理（QTranslator 生命周期由 m_translator 持有）。
+    // 若翻译加载失败应当输出警告（之前默认悄无声息地回退到英文）。
+    {
+        QTranslator probeTranslator;
+        bool loaded = probeTranslator.load(QString(":/i18n/%1.qm").arg(QLocale::system().name()));
+        if (!loaded) {
+            qWarning() << "Translation file for locale"
+                       << QLocale::system().name()
+                       << "not found; UI will fall back to source language.";
+        }
+    }
     LOGD(QString("System locale: %1").arg(QLocale::system().name()));
 
     // 创建并显示主窗口
