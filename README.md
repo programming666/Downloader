@@ -38,7 +38,7 @@ Downloader/
 > 当前 README 不内嵌截图。运行 `cmake --build build` 后启动可执行文件，
 > 界面位于主窗口表格中（`mainwindow.ui` 定义列：文件名 / 大小 / 进度 / 速度 / 状态 / 操作）。
 >
-> 占位符：后续可在此处追加 `docs/screenshots/main.png` 等素材。
+> 后续可在 `docs/screenshots/main.png` 等路径追加素材（暂留占位）。
 
 ## 🔧 编译说明
 
@@ -57,12 +57,6 @@ mkdir build
 
 # 2. 配置项目（祈祷CMake能找到Qt）
 ```
-
-> 构建说明：CMake 通过 `find_package(Qt6 ...)` 自动定位 Qt；如果 Qt 装在
-> 非默认位置，可通过 `cmake -DCMAKE_PREFIX_PATH=D:/Qt/6.10.0/mingw_64 ..`
-> 显式指定。`translations/*.ts` 文件由 `qt_add_translations()` 在构建时
-> 自动编译为 `*.qm`，无需手动跑 `lrelease`。
-
 （说实话我也不记得我怎么干的了，所以推荐：**下载QT，然后安装，然后打开QT Creator,然后打开项目（不保证QT能成功安装而且读取CmakeLists.txt）**）
 ```bash
 # 3. 编译（如果出错，请默念"屎山代码"三遍）
