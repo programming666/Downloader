@@ -33,7 +33,14 @@
 
 # build files and caches
 build/
+build-*/
 .cache/
+
+# Browser extension packaging (中文目录 "插件" 在 Windows 路径里也会被匹配)
+插件/
+插件.zip
+插件/*.crx
+插件/*.pem
 
 # cmake files
 CMakeLists.txt.user
