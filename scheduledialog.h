@@ -116,7 +116,7 @@ private:
 
     /**
      * @brief 简单 cron 表达式校验：5 字段（分 时 日 月 周），每个字段范围合法。
-     * 支持 *, 数字, a-b, a-b/n, */n, 列表 a,b,c。
+     * 支持 *、数字、a-b、a-b/n、步进（形如 star-slash-n，即 * 后跟 /n）、列表 a,b,c。
      * @return 合法返回 true
      */
     static bool isValidCronExpression(const QString &expr);

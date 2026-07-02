@@ -103,7 +103,12 @@ static bool isPrivateOrLoopbackIp(const QHostAddress &addr)
         // fe80::/10 — link-local（QHostAddress 已覆盖）
         // ff00::/8 — multicast（QHostAddress 已覆盖）
         // ::ffff:a.b.c.d — IPv4-mapped：递归检查嵌入的 IPv4
-        if (addr.isIPv4Mapped()) {
+        // Qt 6.11 removed QHostAddress::isIPv4Mapped(); check bytes per RFC 4291 §2.5.5.2.
+        const bool isV4Mapped = (ip6[0]  == 0 && ip6[1]  == 0 && ip6[2]  == 0 &&
+                                 ip6[3]  == 0 && ip6[4]  == 0 && ip6[5]  == 0 &&
+                                 ip6[6]  == 0 && ip6[7]  == 0 && ip6[8]  == 0 &&
+                                 ip6[9]  == 0 && ip6[10] == 0xff && ip6[11] == 0xff);
+        if (isV4Mapped) {
             const quint32 mapped = (quint32(ip6[12]) << 24) | (quint32(ip6[13]) << 16)
                                  | (quint32(ip6[14]) << 8)  |  quint32(ip6[15]);
             const QHostAddress v4(mapped);
@@ -370,34 +375,34 @@ bool HttpServer::startServer(quint16 port)
         m_httpServer->route("/download", QHttpServerRequest::Method::Post,
             [this](const QHttpServerRequest &request) -> QHttpServerResponse {
                 // 1) Origin 校验
-                const QByteArray origin = request.value("Origin").toUtf8();
+                const QByteArray origin = request.value("Origin");
                 const bool originOk = originAllowed(origin);
                 if (!originOk) {
                     qWarning() << "[HttpServer] rejected origin:" << origin;
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::Forbidden,
+                        "application/json",
                         jsonErrorBody(QStringLiteral("origin not allowed")),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::Forbidden);
                 }
 
                 // 2) Bearer token 校验
-                const QByteArray auth = request.value("Authorization").toUtf8();
+                const QByteArray auth = request.value("Authorization");
                 const QByteArray presented = bearerFromAuthHeader(auth);
                 if (presented.isEmpty() || presented != HARDCODED_BEARER_TOKEN) {
                     qWarning() << "[HttpServer] rejected: missing/invalid bearer token";
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::Unauthorized,
+                        "application/json",
                         jsonErrorBody(QStringLiteral("missing or invalid bearer token")),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::Unauthorized);
                 }
 
                 // 3) 限制 body 大小
                 const QByteArray body = request.body();
                 if (body.size() > MAX_BODY_SIZE) {
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::PayloadTooLarge,
+                        "application/json",
                         jsonErrorBody(QStringLiteral("request body too large")),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::PayloadTooLarge);
                 }
 
                 // 4) 解析 JSON
@@ -406,57 +411,58 @@ bool HttpServer::startServer(quint16 port)
                 if (parseError.error != QJsonParseError::NoError) {
                     qWarning() << "Failed to parse JSON from client:" << parseError.errorString();
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::BadRequest,
+                        "application/json",
                         jsonErrorBody(QStringLiteral("Invalid JSON")),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::BadRequest);
                 }
                 if (!doc.isObject()) {
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::BadRequest,
+                        "application/json",
                         jsonErrorBody(QStringLiteral("JSON is not an object")),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::BadRequest);
                 }
 
                 QJsonObject obj = doc.object();
                 QString url, filename, savePath, err;
                 if (!extractStringField(obj, "url", &url, &err, /*required=*/true)) {
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::BadRequest,
+                        "application/json",
                         jsonErrorBody(err),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::BadRequest);
                 }
                 if (!isValidDownloadUrl(url, &err)) {
                     qWarning() << "[HttpServer] SSRF/url rejected:" << url << err;
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::BadRequest,
+                        "application/json",
                         jsonErrorBody(QStringLiteral("invalid url: %1").arg(err)),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::BadRequest);
                 }
                 if (!extractStringField(obj, "filename", &filename, &err, /*required=*/false)) {
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::BadRequest,
+                        "application/json",
                         jsonErrorBody(err),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::BadRequest);
                 }
                 if (!extractStringField(obj, "savePath", &savePath, &err, /*required=*/false)) {
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::BadRequest,
+                        "application/json",
                         jsonErrorBody(err),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::BadRequest);
                 }
                 if (!filename.isEmpty() && !isSafeFileName(filename, &err)) {
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::BadRequest,
+                        "application/json",
                         jsonErrorBody(QStringLiteral("invalid filename: %1").arg(err)),
-                        "application/json");
+                        QHttpServerResponse::StatusCode::BadRequest);
                 }
 
                 LOGD(QString("[HttpServer] new download url=%1 filename=%2").arg(url, filename));
                 emit newDownloadRequest(url, savePath.isEmpty() ? filename : savePath);
 
                 return QHttpServerResponse(
+                    "application/json",
                     jsonOkBody(QStringLiteral("Download request received")),
-                    "application/json");
+                    QHttpServerResponse::StatusCode::Ok);
             });
 
         // 共享 CORS preflight：仅在允许的 origin 上回显。其它 origin 直接拒绝。
@@ -465,12 +471,12 @@ bool HttpServer::startServer(quint16 port)
         // header 的响应即可，preflight 浏览器会接受。
         m_httpServer->route("/download", QHttpServerRequest::Method::Options,
             [](const QHttpServerRequest &request) {
-                const QByteArray origin = request.value("Origin").toUtf8();
+                const QByteArray origin = request.value("Origin");
                 if (!originAllowed(origin)) {
                     return QHttpServerResponse(
-                        QHttpServerResponse::StatusCode::Forbidden,
+                        "text/plain",
                         QByteArrayLiteral("origin not allowed"),
-                        "text/plain");
+                        QHttpServerResponse::StatusCode::Forbidden);
                 }
                 // 用空 body + NoContent 状态；CORS 头由浏览器扩展使用
                 // Access-Control-Request-Headers 自行判断（我们要求 Authorization）。

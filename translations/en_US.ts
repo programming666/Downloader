@@ -1,25 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE TS>
 <TS version="2.1" language="en_US">
-<translatorcomment>
-English (United States) translation of the Downloader Qt application.
+<!--
+  English (United States) translation.
 
-This file mirrors the strings produced by Qt's lupdate tool from the
-source files at translation time (mainwindow.cpp/.ui, downloadtask.cpp,
-httpworker.cpp, newtaskdialog.cpp/.ui, settingsdialog.cpp/.ui, systemtray.cpp).
-
-Translator notes:
-- Source strings are mostly Chinese. Translate to natural English; do not
-  literal-translate "下载中" as "Downloading-ing" — match the meaning.
-- Status keywords (Pending / Downloading / Paused / Cancelled / Completed /
-  Failed) appear in a narrow table column. Keep them to one word.
-- Table column headers come from mainwindow.cpp:57.
-- %1, %2, %3 are positional placeholders preserved by Qt at runtime;
-  preserve their order.
-- File paths, hostnames, and protocol names must not be translated.
-- Some source strings are already English (e.g. "URL", "Switch to English
-  interface") — keep them as-is.
-</translatorcomment>
+  Translator notes have moved to TRANSLATOR_NOTES.md (same directory).
+  Do NOT add a top-level <translatorcomment> block to this .ts file —
+  lrelease does not recognize that element and will fail with
+  "Unexpected tag <translatorcomment>".
+-->
 <context>
     <name>DownloadTask</name>
     <message>

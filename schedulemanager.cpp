@@ -2,6 +2,7 @@
 #include "downloadtask.h"
 #include <QTimer>
 #include <QDateTime>
+#include <QTimeZone>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -36,7 +37,7 @@ ScheduledTask ScheduledTask::fromJson(const QJsonObject& json)
     // 解析时间后强制设为 LocalTime，与任务后续比较一致
     QDateTime parsed = QDateTime::fromString(json["scheduledTime"].toString(), Qt::ISODate);
     if (parsed.timeSpec() != Qt::LocalTime) {
-        parsed.setTimeSpec(Qt::LocalTime);
+        parsed.setTimeZone(QTimeZone::LocalTime);
     }
     task.scheduledTime = parsed;
     task.isRepeat = json["isRepeat"].toBool();
@@ -163,7 +164,7 @@ QDateTime ScheduleManager::computeNextFire(const ScheduledTask& task, const QDat
     // 转换为 LocalTime，确保加秒数后跨DST时由Qt自动按本地日历处理
     QDateTime base = task.scheduledTime;
     if (base.timeSpec() != Qt::LocalTime) {
-        base.setTimeSpec(Qt::LocalTime);
+        base.setTimeZone(QTimeZone::LocalTime);
     }
     QDateTime candidate = base.addSecs(task.repeatInterval * 3600);
     while (candidate <= now) {
@@ -185,7 +186,7 @@ void ScheduleManager::checkScheduledTasks()
 
         // 把当前 scheduledTime 也强制为 LocalTime 以保证比较一致
         if (task.scheduledTime.timeSpec() != Qt::LocalTime) {
-            task.scheduledTime.setTimeSpec(Qt::LocalTime);
+            task.scheduledTime.setTimeZone(QTimeZone::LocalTime);
         }
 
         // 检查任务是否到期

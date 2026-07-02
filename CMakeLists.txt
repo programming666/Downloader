@@ -20,7 +20,7 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 # Consolidated find_package: query Qt6 once with all components we need.
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Network Gui Concurrent)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Network Gui Concurrent LinguistTools)
 
 # Qt6::HttpServer is optional; gracefully fall back to the bundled QTcpServer impl.
 find_package(Qt6 COMPONENTS HttpServer QUIET)

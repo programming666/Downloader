@@ -28,6 +28,16 @@
 #include "schedulemanager.h"
 #include "scheduledialog.h"
 #include "historydialog.h"
+
+// Qt's QSet/QHash require a qHash() overload for the key type. QPointer<T> doesn't
+// ship one, so we provide one at namespace scope. This MUST be at file scope (not
+// a friend inside MainWindow) because ADL on QPointer<DownloadTask> only inspects
+// the Qt and global namespaces — MainWindow's class scope is never searched.
+inline size_t qHash(const QPointer<DownloadTask> &key, size_t seed = 0) noexcept
+{
+    // Hash the underlying QObject*; equality comes from QPointer's built-in operator==.
+    return qHash(reinterpret_cast<quintptr>(static_cast<const QObject *>(key.data())), seed);
+}
 #include <QSet>
 
 QT_BEGIN_NAMESPACE
@@ -231,12 +241,8 @@ private:
     int m_uiIdleTicks = 0;              ///< UI更新定时器空闲计数，连续多次无任务时停止定时器
 
 public:
-    /// 让 QSet<QPointer<DownloadTask>> 能放进 QHash/QSet：QHash 默认要求 qHash 重载。
-    /// 用 inline friend 定义在类内，避免在全局命名空间污染；同时不会引发 ODR 冲突。
-    friend size_t qHash(const QPointer<DownloadTask>& key, size_t seed = 0) noexcept
-    {
-        return qHash(key.data(), seed);
-    }
+    // qHash overload for QPointer<DownloadTask> is now at namespace scope above.
+    // QPointer's operator== already provides equality, so QSet/QHash work as expected.
 
     // 新建任务后启动延迟：避免同步阻塞 UI
     static constexpr int kTaskStartDelayMs = 100;

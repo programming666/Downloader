@@ -60,7 +60,13 @@ static bool isPrivateOrLoopbackIp(const QHostAddress &addr)
     if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
         const Q_IPV6ADDR ip6 = addr.toIPv6Address();
         if ((ip6[0] & 0xFEu) == 0xFCu) return true;
-        if (addr.isIPv4Mapped()) {
+        // IPv4-mapped IPv6: bytes 0-9 == 0, bytes 10-11 == 0xff (RFC 4291 §2.5.5.2).
+        // Qt 6.11 removed QHostAddress::isIPv4Mapped(); check the bytes directly.
+        const bool isV4Mapped = (ip6[0]  == 0 && ip6[1]  == 0 && ip6[2]  == 0 &&
+                                 ip6[3]  == 0 && ip6[4]  == 0 && ip6[5]  == 0 &&
+                                 ip6[6]  == 0 && ip6[7]  == 0 && ip6[8]  == 0 &&
+                                 ip6[9]  == 0 && ip6[10] == 0xff && ip6[11] == 0xff);
+        if (isV4Mapped) {
             const quint32 mapped = (quint32(ip6[12]) << 24) | (quint32(ip6[13]) << 16)
                                  | (quint32(ip6[14]) << 8)  |  quint32(ip6[15]);
             return isPrivateOrLoopbackIp(QHostAddress(mapped));
