@@ -36,44 +36,42 @@ build/
 build-*/
 .cache/
 
-# Browser extension packaging (中文目录 "插件" 在 Windows 路径里也会被匹配)
-插件/
-插件.zip
-插件/*.crx
-插件/*.pem
-
 # cmake files
 CMakeLists.txt.user
 CMakeCache.txt
 CMakeFiles/
+CMakeScripts/
 cmake_install.cmake
 install_manifest.txt
+Makefile
+make.bat
 CTestTestfile.cmake
-_deps/
 
-# Qt generated files
+# Qt 中间产物（MOC/UIC/RCC 自动生成）
 moc_*.cpp
 moc_*.h
 qrc_*.cpp
 ui_*.h
-.qmake.stash
-*.pro.user*
 
-# Backup / temp / editor swap files
+# 编辑器临时/备份
 *.bak
 *.tmp
 *.orig
 *.swp
-*.swo
 *~
 
-# Editor / IDE folders
+# IDE
 .vscode/
 .idea/
 *.code-workspace
 
-# OS metadata
+# OS
 .DS_Store
 Thumbs.db
 
+# installer
 installer/
+
+# 浏览器扩展产物（源码在 插件/，以下为打包/签名残留）
+*.crx
+*.pem

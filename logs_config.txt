@@ -1,7 +1,10 @@
-# Logger configuration for Downloader.
-# Empty values fall back to logger.h defaults (cross-platform: AppDataLocation).
-
-[log_path]
-# Path to the log file. Leave empty to let the application pick a writable
-# per-user location (recommended for portability).
+# 日志配置
+#
+# log_path 留空：logger.h 默认按 QStandardPaths::AppDataLocation/logs/downloader.log
+# 解析，跨平台可用（不再硬编码 D:/LOG/）。
+# 如需手动指定，写绝对路径，例如：
+#   log_path=C:/Users/<you>/AppData/Local/Programming666/Downloader/logs/downloader.log
+[log]
 log_path=
+log_level=INFO
+append=true

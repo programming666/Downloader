@@ -1,62 +1,67 @@
-# Normalize line endings (Windows host, CRLF convention for Qt projects).
-# `text=auto` lets git autodetect; `eol=crlf` ensures checkout uses CRLF on
-# Windows while internal git diffs stay sane.
-* text=auto eol=crlf
+# Auto detect text files and normalize line endings on commit.
+# This project is Qt6 + MinGW on Windows; source/binary conventions are
+# tailored to that workflow but stay safe across OSes.
 
-# Source files we know are text and want CRLF on Windows checkout.
-*.cpp text eol=crlf
-*.h   text eol=crlf
-*.c   text eol=crlf
-*.ui  text eol=crlf
-*.qrc text eol=crlf
-*.qss text eol=crlf
-*.ts  text eol=crlf
-*.cmake text eol=crlf
-CMakeLists.txt text eol=crlf
+# Default: let git auto-detect; CRLF for text in checkout on Windows.
+* text=auto
 
-# Documentation
-*.md  text eol=crlf
-*.txt text eol=crlf
-LICENSE text eol=crlf
+# C/C++/Qt source: CRLF (Qt/Windows convention).
+*.c        text eol=crlf
+*.cpp      text eol=crlf
+*.cc       text eol=crlf
+*.cxx      text eol=crlf
+*.h        text eol=crlf
+*.hh       text eol=crlf
+*.hpp      text eol=crlf
+*.hxx      text eol=crlf
+*.inc      text eol=crlf
 
-# Scripts: keep CRLF for batch, LF for shell.
-*.bat text eol=crlf
-*.cmd text eol=crlf
-*.ps1 text eol=crlf
-*.sh  text eol=lf
+# Qt MOC/UIC/QRC generated sources: still text, CRLF to match.
+*.qrc      text eol=crlf
+*.ui       text eol=crlf
+*.qss      text eol=crlf
+*.ts       text eol=crlf
 
-# Web files
-*.html text eol=crlf
-*.css  text eol=crlf
-*.js   text eol=crlf
-*.json text eol=crlf
-*.xml  text eol=crlf
-*.yml  text eol=lf
-*.yaml text eol=lf
-*.ini  text eol=crlf
+# CMake / shell scripts: LF (POSIX convention).
+CMakeLists.txt           text eol=lf
+*.cmake                  text eol=lf
+*.cmake.in               text eol=lf
+*.sh                     text eol=lf
+*.bat                    text eol=crlf
+*.ps1                    text eol=crlf
 
-# Binary / opaque asset files - never diff, never normalize.
-*.png binary
-*.ico  binary
-*.icns binary
-*.jpg  binary
-*.jpeg binary
-*.gif  binary
-*.webp binary
-*.bmp  binary
-*.qm   binary
-*.qrc_ binary
-*.gz   binary
-*.zip  binary
-*.7z   binary
-*.rar  binary
-*.tar  binary
-*.pdf  binary
-*.exe  binary
-*.dll  binary
-*.lib  binary
-*.a    binary
-*.so   binary
-*.dylib binary
-*.o    binary
-*.obj  binary
+# Documentation / data: LF.
+*.md         text eol=lf
+*.txt        text eol=lf
+*.json       text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+*.toml       text eol=lf
+*.ini        text eol=lf
+*.csv        text eol=lf
+*.html       text eol=lf
+*.css        text eol=lf
+*.js         text eol=lf
+*.qrc        text eol=crlf
+LICENSE      text eol=lf
+
+# Binary: do not touch line endings.
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.ico        binary
+*.qm         binary
+*.gz         binary
+*.zip        binary
+*.7z         binary
+*.exe        binary
+*.dll        binary
+*.so         binary
+*.dylib      binary
+*.o          binary
+*.obj        binary
+*.a          binary
+*.lib        binary
+*.crx        binary
+*.pem        binary
