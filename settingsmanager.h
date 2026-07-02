@@ -137,6 +137,15 @@ signals:
      */
     void themeChanged(const QString& themeName);
 
+    /**
+     * @brief 当任意持久化设置（代理/线程数/默认路径/监听端口/静默模式等）
+     * 通过 save*() 写入后发射此广播信号。
+     *
+     * 接收方需自行调用 load*() 拉取最新值；本信号不携带具体变更的 key，
+     * 因为 Qt 中跨对象的信号开销极低，全量广播比按 key 细分更不易遗漏。
+     */
+    void settingsChanged();
+
 private:
     /**
      * @brief 私有构造函数，确保单例模式。

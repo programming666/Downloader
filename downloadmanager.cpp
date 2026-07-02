@@ -1,5 +1,6 @@
 #include "downloadmanager.h"
 #include "logger.h"
+#include "settingsmanager.h"
 #include <QDebug>
 #include <QPointer>
 #include <QMutex>
@@ -30,10 +31,16 @@ DownloadManager::DownloadManager(QObject *parent)
     // 根据CPU核心数设置最大线程数，留一个核心给UI和其他任务
     int maxThreads = QThread::idealThreadCount() > 1 ? QThread::idealThreadCount() - 1 : 1;
     LOGD(QString("检测到CPU核心数:%1 设置最大线程数:%2").arg(QThread::idealThreadCount()).arg(maxThreads));
-    
+
     m_threadPool->setMaxThreadCount(maxThreads);
     LOGD(QString("线程池最大线程数设置完成:%1").arg(m_threadPool->maxThreadCount()));
-    
+
+    // 监听设置变更广播：当代理/线程数/默认路径等被 SettingsDialog 写入时，
+    // 自动把新代理推送给所有活动 DownloadTask。线程数变更只对后续新建任务
+    // 生效——in-flight 任务的 worker 数量不能中途改变。
+    connect(&SettingsManager::instance(), &SettingsManager::settingsChanged,
+            this, &DownloadManager::onSettingsChanged);
+
     LOGD("DownloadManager初始化完成");
 }
 
@@ -235,4 +242,32 @@ void DownloadManager::onTaskError(const QString& errorString)
     }
 
     LOGD("onTaskError处理完成");
+}
+
+void DownloadManager::onSettingsChanged()
+{
+    // 拉取最新代理。其它设置（线程数/默认路径等）不影响 in-flight 任务，
+    // 由调用方在创建新任务时直接读 load*() 即可。
+    SettingsManager::ProxyType pt = SettingsManager::NoProxy;
+    QNetworkProxy proxy;
+    SettingsManager::instance().loadProxy(pt, proxy);
+    proxy.setType(static_cast<QNetworkProxy::ProxyType>(pt));
+
+    // 拷贝任务指针到 QPointer 后再调 applyProxy，避免任务在我们迭代期间被 deleteLater
+    QList<QPointer<DownloadTask>> snapshot;
+    {
+        QMutexLocker locker(&g_tasksMutex);
+        snapshot.reserve(m_tasks.size());
+        for (DownloadTask* task : m_tasks) {
+            snapshot.append(QPointer<DownloadTask>(task));
+        }
+    }
+    int applied = 0;
+    for (const QPointer<DownloadTask>& p : snapshot) {
+        DownloadTask* task = p.data();
+        if (!task) continue;
+        task->applyProxy(proxy);
+        ++applied;
+    }
+    LOGD(QString("DownloadManager::onSettingsChanged: 代理已推送给 %1 个活动任务").arg(applied));
 }

@@ -98,6 +98,13 @@ private slots:
      */
     void onTaskError(const QString& errorString);
 
+    /**
+     * @brief 监听 SettingsManager 的 settingsChanged 广播；把最新代理
+     * 推送给所有活动任务。线程数变更仅对新建任务生效（MainWindow 在
+     * createTask 时直接读 loadDefaultThreads()，无需此路径介入）。
+     */
+    void onSettingsChanged();
+
 private:
     /**
      * @brief 私有构造函数，确保单例模式。

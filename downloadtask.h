@@ -14,6 +14,7 @@
 #include <QEventLoop>
 #include <QThreadPool>
 #include <QAtomicInt>
+#include <QNetworkProxy>
 #include "httpworker.h"
 //#include "historymanager.h" // 包含历史管理器头文件
 
@@ -68,6 +69,22 @@ public:
      * @param deleteTempFiles 是否删除所有临时文件。
      */
     void cancel(bool deleteTempFiles = true);
+
+    /**
+     * @brief 应用新的代理设置。
+     *
+     * 由 DownloadManager::onSettingsChanged() 在 SettingsManager 发出
+     * settingsChanged 广播时调用。会：
+     *   1. 更新 m_proxy 供后续新建的 HEAD/Worker QNAM 使用；
+     *   2. 立即对 m_headManager（如果存在）调用 setProxy；
+     *   3. 对所有活动 worker 的 QNAM 调用 setProxy。
+     *
+     * 由于 DownloadTask 与 HttpWorker 的 QNAM 都活在主线程，
+     * 不需要 QMetaObject::invokeMethod 跨线程派发。
+     *
+     * @param proxy 新的 QNetworkProxy（type 字段需已正确设置）。
+     */
+    void applyProxy(const QNetworkProxy& proxy);
 
     /**
      * @brief 获取当前任务的状态。
@@ -310,6 +327,7 @@ private:
     mutable QMutex m_historyMutex;              ///< 专门保护历史记录操作的互斥锁
     QAtomicInt m_headRequestTimedOut{0};  ///< 标记HEAD请求是否已超时（原子，多超时回调并发安全）。
     bool m_alreadyFinished{false};      ///< 标记finished信号是否已发射，避免重复发射。
+    QNetworkProxy m_proxy;              ///< 当前代理设置；HEAD/Worker 的 QNAM 通过 applyProxy 同步此值。
 };
 
 #endif // DOWNLOADTASK_H

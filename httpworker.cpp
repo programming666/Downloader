@@ -381,6 +381,28 @@ void HttpWorker::stopAsync()
     }
 }
 
+/**
+ * @brief 把新代理应用到 worker 的 QNAM。
+ *
+ * 必须在主线程调用（DownloadTask::applyProxy 的调用约定）。
+ * 由于 HttpWorker 的 QNAM 由 startDownload() 在主线程通过
+ * QTimer::singleShot(0, qApp, ...) 构造，因此从主线程直接调用 setProxy
+ * 是 Qt 文档保证的线程安全操作。已发出去的请求不会被中断，但下一条
+ * 请求（包含重试路径上由 continueDownload() 重新发起的）会用新代理。
+ */
+void HttpWorker::setProxy(const QNetworkProxy& proxy)
+{
+    if (!m_netManager) {
+        // QNAM 还没创建（worker 仍在 Pending 或 stop 路径上没有跑过 run()）。
+        // 这种情况下，无需做任何事——startDownload() 后续创建 QNAM 时不会读取
+        // 我们这里的任何状态，调用方会通过 DownloadTask::m_proxy 兜底；
+        // 不过 m_netManager 是在 run() 的 QTimer::singleShot(0, qApp, ...) 里
+        // 才创建的，所以这里读不到是预期。什么都不做即可。
+        return;
+    }
+    m_netManager->setProxy(proxy);
+}
+
 void HttpWorker::stop()
 {
     LOGD("停止HttpWorker");

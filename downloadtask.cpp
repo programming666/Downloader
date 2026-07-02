@@ -1,5 +1,6 @@
 #include "downloadtask.h"
 #include "downloadmanager.h" // 包含DownloadManager以获取线程池
+#include "settingsmanager.h"
 #include "logger.h"
 #include <QFileInfo>
 #include <QDir>
@@ -9,6 +10,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QStandardPaths>
+#include <QNetworkProxy>
 #include "historymanager.h"
 
 /**
@@ -50,7 +52,16 @@ DownloadTask::DownloadTask(const QUrl& url, const QString& savePath, int threadC
     }
 
     LOGD(QString("开始构造DownloadTask - URL:%1 保存路径:%2 线程数:%3").arg(url.toString()).arg(savePath).arg(m_threadCount));
-    
+
+    // 拉取启动时刻的代理设置；后续 SettingsManager 发出 settingsChanged 广播后
+    // DownloadManager::onSettingsChanged 会调 applyProxy 更新本任务。
+    {
+        SettingsManager::ProxyType pt = SettingsManager::NoProxy;
+        SettingsManager::instance().loadProxy(pt, m_proxy);
+        m_proxy.setType(static_cast<QNetworkProxy::ProxyType>(pt));
+        LOGD(QString("构造时已加载代理: 类型=%1 主机=%2").arg(int(m_proxy.type())).arg(m_proxy.hostName()));
+    }
+
     // 简化构造函数，只做基本初始化
     QFileInfo fileInfo(m_filePath);
     m_fileName = fileInfo.fileName();
@@ -352,6 +363,47 @@ void DownloadTask::cancel(bool deleteTempFiles)
         LOGD(QString("任务取消完成 - URL:%1").arg(m_url.toString()));
     } else {
         LOGD("任务已完成或已取消，无需操作");
+    }
+}
+
+/**
+ * @brief 把新的代理设置同步到本任务持有的 QNAM 上。
+ *
+ * 由 DownloadManager::onSettingsChanged() 在 SettingsManager 发出
+ * settingsChanged() 时调用。DownloadTask 与所有 HttpWorker 的 QNAM
+ * 都在主线程构造（HttpWorker 通过 QTimer::singleShot(0, qApp, …) 在
+ * 主线程 new QNetworkAccessManager），因此这里直接同步调用 setProxy 即可，
+ * 不需要 QMetaObject::invokeMethod 跨线程派发。
+ *
+ * 行为：
+ *   1. m_proxy 被更新——这是给后续 initializeDownload() / createHttpWorkers()
+ *      新建 QNAM 时使用的最新代理值；
+ *   2. m_headManager 已存在的话，立即同步 setProxy；
+ *   3. 所有已存在 worker 的 QNAM 也立即 setProxy（已发出去的请求不会被打断，
+ *      新的请求会带上新代理；Qt 的 QNetworkAccessManager 支持中途切换代理）。
+ */
+void DownloadTask::applyProxy(const QNetworkProxy& proxy)
+{
+    LOGD(QString("DownloadTask::applyProxy - 类型=%1 主机=%2")
+         .arg(int(proxy.type())).arg(proxy.hostName()));
+
+    m_proxy = proxy;
+
+    // HEAD 请求的 QNAM（如果存在）：主线程同步设置
+    if (m_headManager) {
+        m_headManager->setProxy(proxy);
+    }
+
+    // 已存在的 worker：拷贝到本地列表再操作，避免持锁调外部接口
+    QList<HttpWorker*> workerSnapshot;
+    {
+        QMutexLocker locker(&m_mutex);
+        workerSnapshot = m_workers;
+    }
+    for (HttpWorker* worker : workerSnapshot) {
+        if (worker) {
+            worker->setProxy(proxy);
+        }
     }
 }
 

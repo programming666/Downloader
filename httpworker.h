@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QRunnable>
 #include <QNetworkAccessManager>
+#include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QFile>
 #include <QUrl>
@@ -51,6 +52,18 @@ public:
      * @brief 异步停止下载。
      */
     void stopAsync();
+
+    /**
+     * @brief 更新 worker 内部 QNAM 的代理设置。
+     *
+     * DownloadTask::applyProxy() 在主线程调用本函数。QNAM 由 worker 在主线程
+     * 通过 QTimer::singleShot(0, qApp, ...) 创建（见 HttpWorker::startDownload），
+     * 因此 setProxy 从主线程直接同步调用是安全的——Qt 的 QNetworkAccessManager
+     * 内部对此做了线程安全处理，对正在进行的请求不会打断，新请求会带上新代理。
+     *
+     * @param proxy 新的代理设置（type 字段需已正确设置）。
+     */
+    void setProxy(const QNetworkProxy& proxy);
 
 signals:
     /**

@@ -95,6 +95,7 @@ void SettingsManager::saveProxy(ProxyType type, const QNetworkProxy& proxy)
     m_settings->endGroup();
     // 立即刷新到磁盘，避免崩溃时丢失配置
     m_settings->sync();
+    emit settingsChanged();
 }
 
 /**
@@ -134,6 +135,7 @@ void SettingsManager::saveTheme(const QString& themeName)
     m_settings->endGroup();
     m_settings->sync(); // 立即刷新到磁盘
     emit themeChanged(themeName); // 发射信号通知主题已改变
+    emit settingsChanged();       // 通知其它监听方设置已变更
 }
 
 QString SettingsManager::loadTheme() const
@@ -150,6 +152,7 @@ void SettingsManager::saveDefaultDownloadPath(const QString& path)
     m_settings->setValue(KEY_DEFAULT_PATH, path);
     m_settings->endGroup();
     m_settings->sync();
+    emit settingsChanged();
 }
 
 /**
@@ -195,6 +198,7 @@ void SettingsManager::saveDefaultThreads(int threads)
     m_settings->setValue(KEY_DEFAULT_THREADS, threads);
     m_settings->endGroup();
     m_settings->sync();
+    emit settingsChanged();
 }
 
 /**
@@ -219,6 +223,8 @@ void SettingsManager::saveLocalListenPort(quint16 port)
     m_settings->setValue(KEY_LOCAL_LISTEN_PORT, port);
     m_settings->endGroup();
     m_settings->sync();
+    // 端口变更需要重启监听服务才生效，但仍发出广播以触发任何监听方刷新
+    emit settingsChanged();
 }
 
 quint16 SettingsManager::loadLocalListenPort() const
@@ -235,6 +241,7 @@ void SettingsManager::saveSilentMode(bool silent)
     m_settings->setValue(KEY_SILENT_MODE, silent);
     m_settings->endGroup();
     m_settings->sync();
+    emit settingsChanged();
 }
 
 QString SettingsManager::bearerToken()
