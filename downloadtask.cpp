@@ -117,6 +117,9 @@ DownloadTask::~DownloadTask()
     LOGD("标记所有worker为延迟删除");
     for (HttpWorker* worker : m_workers) {
         if (worker) {
+            // 先断开与本任务的全部信号连接，避免在 deleteLater 排队期间
+            // 晚到的信号进入正在析构的 DownloadTask，导致 UAF。
+            worker->disconnect(this);
             worker->deleteLater();
         }
     }
@@ -166,6 +169,9 @@ void DownloadTask::start()
                 if (worker) {
                     LOGD("停止并删除worker");
                     worker->stop();
+                    // 在 deleteLater 之前断开与本任务的全部信号连接，
+                    // 避免在 deleteLater 排队期间晚到的信号进入新的 DownloadTask。
+                    worker->disconnect(this);
                     worker->deleteLater();
                 } else {
                     LOGD("发现空worker指针");
@@ -421,8 +427,14 @@ int DownloadTask::progressPercentage() const
     if (totalSize <= 0) {
         return 0;
     }
-    int progress = static_cast<int>((static_cast<double>(downloadedSize) / totalSize) * 100);
-    return progress;
+    // 使用整数数学避免 double 精度损失（极大文件时 double 转 int 会丢精度）
+    if (downloadedSize >= totalSize) {
+        return 100;
+    }
+    if (downloadedSize <= 0) {
+        return 0;
+    }
+    return static_cast<int>((downloadedSize * 100) / totalSize);
 }
 
 void DownloadTask::setStatus(DownloadTaskStatus newStatus)
@@ -482,6 +494,7 @@ void DownloadTask::initializeDownload()
             }
             
             setStatus(DownloadTaskStatus::Failed);
+            m_finishTime = QDateTime::currentDateTime();
             emit error(tr("无法创建下载目录: %1").arg(dir.path()));
             saveToHistory("Failed");
             if (!m_alreadyFinished) {
@@ -578,6 +591,7 @@ void DownloadTask::handleHeadRequestError(const QString& errorString)
     
     emit error(tr("HEAD请求失败: %1").arg(errorString));
     setStatus(DownloadTaskStatus::Failed);
+    m_finishTime = QDateTime::currentDateTime();
     saveToHistory("Failed");
     if (!m_alreadyFinished) {
         m_alreadyFinished = true;
@@ -703,6 +717,7 @@ void DownloadTask::onHeadRequestError(QNetworkReply::NetworkError code)
     
     emit error(tr("HEAD请求错误: %1").arg(errorString));
     setStatus(DownloadTaskStatus::Failed);
+    m_finishTime = QDateTime::currentDateTime();
     saveToHistory("Failed");
     if (!m_alreadyFinished) {
         m_alreadyFinished = true;
