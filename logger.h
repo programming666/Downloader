@@ -10,7 +10,7 @@
  */
 
 #include <QFile>
-#include <QTextStream>
+#include <QByteArray>
 #include <QDateTime>
 #include <QString>
 #include <QSettings>
@@ -44,16 +44,14 @@ static QString getLogPath() {
 }
 
 /**
- * @brief 获取一个进程内共享的日志文件输出流。函数局部static + std::call_once 保证
+ * @brief 获取一个进程内共享的日志文件句柄。函数局部static + std::call_once 保证
  *        只被打开一次，避免每次 log 调用 open/close 的开销以及静态初始化竞态。
  * @param outFile [out] 接收已经打开的 QFile* 指针的引用。
- * @param outStream [out] 接收 QTextStream* 的引用。
  * @return 成功打开返回 true；失败返回 false（调用方应静默放弃）。
  */
-static bool getLogStream(QFile*& outFile, QTextStream*& outStream)
+static bool getLogFile(QFile*& outFile)
 {
-    static QFile*  s_file = nullptr;
-    static QTextStream* s_stream = nullptr;
+    static QFile* s_file = nullptr;
     static std::once_flag s_once;
     static bool s_ok = false;
 
@@ -61,10 +59,7 @@ static bool getLogStream(QFile*& outFile, QTextStream*& outStream)
         const QString path = getLogPath();
         QFile* f = new QFile(path);
         if (f->open(QIODevice::WriteOnly | QIODevice::Append)) {
-            QTextStream* ts = new QTextStream(f);
-            ts->setEncoding(QStringConverter::Utf8);
             s_file = f;
-            s_stream = ts;
             s_ok = true;
         } else {
             delete f;
@@ -73,35 +68,26 @@ static bool getLogStream(QFile*& outFile, QTextStream*& outStream)
     });
 
     outFile = s_file;
-    outStream = s_stream;
     return s_ok;
 }
 
 /**
- * @brief 进程退出时关闭并释放日志文件/流。
+ * @brief 进程退出时关闭并释放日志文件句柄。
  * 通过 QCoreApplication::aboutToQuit 信号连接触发。
  */
 static void shutdownLogger()
 {
-    static QFile*  s_file = nullptr;
-    static QTextStream* s_stream = nullptr;
+    static QFile* s_file = nullptr;
     static std::once_flag s_once;
     std::call_once(s_once, []() {
         QFile* f = nullptr;
-        QTextStream* ts = nullptr;
-        getLogStream(f, ts);
+        getLogFile(f);
         s_file = f;
-        s_stream = ts;
     });
-    if (s_stream) {
-        s_stream->flush();
-    }
     if (s_file) {
         s_file->flush();
         s_file->close();
-        delete s_stream;
         delete s_file;
-        s_stream = nullptr;
         s_file = nullptr;
     }
 }
@@ -125,14 +111,19 @@ static QMutex& logMutex()
  */
 static void logToFile(const QString& message) {
     QFile* f = nullptr;
-    QTextStream* ts = nullptr;
-    if (!getLogStream(f, ts) || !f || !ts) {
+    if (!getLogFile(f) || !f) {
         return;
     }
-    // 假设调用方已持 logMutex()，此处不再加锁（避免与 LOGD 宏的双重锁死锁）。
-    *ts << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz ")
-        << message << "\n";
-    ts->flush();
+    // 调用方（LOGD 宏）已持 logMutex()，此处不再加锁。
+    // 把整条日志（时间戳 + 消息 + "\n"）一次性构造成 QByteArray 后单次
+    // QFile::write()，绕过 QTextStream 的内部 QString 缓冲。日志行通常
+    // < 200 字节，远小于 Win32 WriteFile/POSIX write(2) 的原子写入上限，
+    // 配合锁可保证多线程写入不会在字节层面交错。
+    const QByteArray line =
+        QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz ").toUtf8()
+        + message.toUtf8()
+        + '\n';
+    f->write(line);
     f->flush();
 }
 
