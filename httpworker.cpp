@@ -288,13 +288,20 @@ void HttpWorker::continueDownload()
                 safeThis->m_startPoint = 0;
                 safeThis->m_resumeOffset = 0;
                 safeThis->m_bytesReceived.store(0, std::memory_order_release);
-                // abort 当前 reply；cleanup 会保留 m_file（已关闭+删除），下次重新打开
+                // 标记"预期内的 cancel"：下面的 abort() 会同步触发
+                // errorOccurred(OperationCanceledError)，onErrorOccurred 看到这个标志后
+                // 只 quitLoop 走人，让 QTimer::singleShot 排队的 continueDownload()
+                // 真正开始整文件重试。少了这个标志，error 回调会 emit error
+                // 把整条 DownloadTask 拖进 Failed。
+                safeThis->m_alreadyFinished = true;
                 safeReply->abort();
                 safeReply->deleteLater();
                 safeThis->m_reply = nullptr;
                 // 重新发起请求
                 QTimer::singleShot(0, safeThis, [safeThis]() {
                     if (safeThis && !safeThis->m_isStopped) {
+                        // 整文件重试：清掉 m_alreadyFinished 让 onFinished 正常 emit finished
+                        safeThis->m_alreadyFinished = false;
                         safeThis->continueDownload();
                     }
                 });
@@ -320,11 +327,15 @@ void HttpWorker::continueDownload()
                         safeThis->m_startPoint = 0;
                         safeThis->m_resumeOffset = 0;
                         safeThis->m_bytesReceived.store(0, std::memory_order_release);
+                        // 标记"预期内的 cancel"：见上面 200 路径注释
+                        safeThis->m_alreadyFinished = true;
                         safeReply->abort();
                         safeReply->deleteLater();
                         safeThis->m_reply = nullptr;
                         QTimer::singleShot(0, safeThis, [safeThis]() {
                             if (safeThis && !safeThis->m_isStopped) {
+                                // 整文件重试：清掉 m_alreadyFinished 让 onFinished 正常 emit finished
+                                safeThis->m_alreadyFinished = false;
                                 safeThis->continueDownload();
                             }
                         });
@@ -558,6 +569,14 @@ void HttpWorker::onFinished()
         }
     }
 
+    // 如果上层已经标 m_alreadyFinished=true（metaDataChanged abort 触发的重试路径），
+    // 这里不要 cleanup + quitLoop：QTimer::singleShot 排的 continueDownload() 必须
+    // 还在 event loop 里派发，否则整文件重试永远不发生。
+    if (m_alreadyFinished) {
+        LOGD("m_alreadyFinished=true（metaDataChanged 重试路径），跳过 cleanup/quitLoop 让重试继续");
+        return;
+    }
+
     LOGD("开始清理资源");
     cleanup();
     quitLoop();
@@ -571,6 +590,19 @@ void HttpWorker::onErrorOccurred(QNetworkReply::NetworkError code)
     // 防御性 null-check：onErrorOccurred 可能在 stop() 把 m_reply 置空后仍被 Qt 内部派发
     QString errorString = m_reply ? m_reply->errorString() : QStringLiteral("未知错误");
     LOGD(QString("错误详细信息:%1").arg(errorString));
+
+    // metaDataChanged lambda 在"server 忽略 Range / Content-Range 起点不符"路径
+    // 上会自己调 safeReply->abort() 切到整文件重试，abort() 同步触发
+    // errorOccurred(OperationCanceledError)。如果让这里继续走
+    // "非重试 / emit error" 路径，会让 DownloadTask 把这次自己人触发的 cancel
+    // 当成"真实错误"并 cancel 掉所有其他 worker（part1 抛锚拖死 part0/part2..7）。
+    // 识别规则：m_alreadyFinished==true 表示上层已经表态"这次终止是预期的"。
+    // 注意：这里 **不要** quitLoop，QTimer::singleShot 排队了 continueDownload()
+    // 真正开始整文件重试，event loop 必须继续跑才能派发那个 timer。
+    if (code == QNetworkReply::OperationCanceledError && m_alreadyFinished) {
+        LOGD("OperationCanceledError 是上层主动触发（metaDataChanged 重试），不视为错误，继续跑 event loop 等 QTimer 派发重试");
+        return;
+    }
 
     if (m_isStopped && code == QNetworkReply::OperationCanceledError) {
         // 用户主动停止，不是错误
