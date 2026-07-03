@@ -34,6 +34,13 @@ public:
     ~HttpWorker();
 
     /**
+     * @brief 读取本 worker 累计已接收字节数（原子读，跨线程安全）。
+     * 用于 DownloadTask 的 200ms 定时器在主线程汇总所有 worker 的进度，
+     * HEAD 没拿到 Content-Length 时用此值估算"已下载多少"。
+     */
+    qint64 bytesReceivedAtomic() const { return m_bytesReceived.load(std::memory_order_acquire); }
+
+    /**
      * @brief 重置HttpWorker状态，允许重新启动下载（用于断点续传）
      */
     void reset();
@@ -52,6 +59,13 @@ public:
      * @brief 异步停止下载。
      */
     void stopAsync();
+
+    /**
+     * @brief 退出 worker 线程内的 QEventLoop。线程安全：
+     *  - 在 worker 线程里直接 quit；
+     *  - 从其他线程调用时用 invokeMethod 切到 worker 线程执行。
+     */
+    void quitLoop();
 
     /**
      * @brief 更新 worker 内部 QNAM 的代理设置。
@@ -133,6 +147,11 @@ private:
     int m_retryCount;               ///< 当前重试次数（实例成员，避免跨worker共享）。
     bool m_alreadyFinished;         ///< 标记finished/error是否已发射，避免重复发射。
     qint64 m_lastLoggedBytes{0};    ///< 上次记录日志时的字节数（实例成员，避免跨worker共享）。
+
+    /// run() 内部事件循环：让 QNetworkReply 的 readyRead/finished 等信号在 worker
+    /// 线程的事件循环里被消化。run() 入口 moveToThread 后，this->thread() == worker
+    /// 线程，QNetworkAccessManager 投递的信号会进入这个 loop。
+    QEventLoop* m_loop = nullptr;
 };
 
 #endif // HTTPWORKER_H

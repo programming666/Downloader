@@ -94,79 +94,73 @@ void HttpWorker::run()
     LOGD(QString("当前线程:%1 主线程:%2")
          .arg(QString::number(reinterpret_cast<quintptr>(QThread::currentThread()), 16))
          .arg(QString::number(reinterpret_cast<quintptr>(qApp->thread()), 16)));
-    
+
     if (m_isStopped) {
         LOGD("任务已停止，直接退出run方法");
         return;
     }
 
+    // 关键：把 QObject 的事件循环亲和切到当前线程池线程。
+    // 不切的话，QNetworkAccessManager 与 QNetworkReply 的 readyRead/finished/
+    // metaDataChanged 信号会按 this->thread() == 主线程派发，导致 N 个 worker
+    // 的高频 IO 事件全部排回主线程，把 UI 冻死。
+    moveToThread(QThread::currentThread());
+
+    // 跑一个本地事件循环消化 QNetworkReply 信号。
+    // 退出条件：m_alreadyFinished（onFinished / onErrorOccurred 翻 true）或
+    // m_isStopped（外部 stop() 路径），二者都会调 quitLoop() 退出循环。
+    m_loop = new QEventLoop();
+
     LOGD("开始调用startDownload()");
     startDownload();
-    LOGD("startDownload()调用完成");
+    LOGD("startDownload()调用完成，进入事件循环");
+
+    // exec() 阻塞到 quitLoop() 调用。stop() 走 BlockingQueuedConnection 时会
+    // 在 worker 线程同步调 quitLoop()，所以这个 exec 会从 stop 路径返回。
+    m_loop->exec();
+    LOGD("事件循环退出");
+
+    delete m_loop;
+    m_loop = nullptr;
+    LOGD("HttpWorker::run 退出");
 }
 
 /**
  * @brief 开始HTTP下载任务
- * 
+ *
  * 执行实际的HTTP下载操作：
  * 1. 打开目标文件准备写入
  * 2. 定位文件指针到指定位置
  * 3. 发送HTTP GET请求
  * 4. 连接网络响应信号
  * 5. 开始数据接收
- * 
+ *
  * 支持断点续传，通过Range头指定下载范围
  * 文件操作失败时会发射错误信号
+ *
+ * 线程模型：run() 入口已经把 this 切到当前线程池线程（moveToThread），所以
+ * 这里的 new QNetworkAccessManager / QNetworkReply 都在 worker 线程，readyRead
+ * / finished 信号会派发到 worker 线程的事件循环里消化，不会再排回主线程。
  */
 void HttpWorker::startDownload()
 {
     LOGD(QString("开始网络下载，范围:%1-%2").arg(m_startPoint).arg(m_endPoint));
-    
+
     if (m_isStopped) {
         LOGD("任务已停止，退出startDownload");
         cleanup();
         return;
     }
-    
-    LOGD("开始创建QNetworkAccessManager...");
 
-    // 检查当前线程
     LOGD(QString("当前线程:%1 主线程:%2")
          .arg(QString::number(reinterpret_cast<quintptr>(QThread::currentThread()), 16))
          .arg(QString::number(reinterpret_cast<quintptr>(qApp->thread()), 16)));
-    
-    // 如果已经在主线程，直接创建网络管理器
-    if (QThread::currentThread() == qApp->thread()) {
-        LOGD("已经在主线程中，直接创建QNetworkAccessManager");
-        if (m_isStopped) {
-            LOGD("任务已停止，取消网络管理器创建");
-            cleanup();
-            return;
-        }
-        m_netManager = new QNetworkAccessManager();
-        LOGD("QNetworkAccessManager创建完成，开始网络请求");
-        continueDownload();
-    } else {
-        // 使用QTimer::singleShot在主线程中创建网络管理器
-        QPointer<HttpWorker> safeThis(this);
-        QTimer::singleShot(0, qApp, [safeThis]() {
-            if (!safeThis) {
-                return;
-            }
-            if (safeThis->m_isStopped) {
-                LOGD("任务已停止，取消网络管理器创建");
-                safeThis->cleanup();
-                return;
-            }
 
-            LOGD("在主线程中创建QNetworkAccessManager");
-            safeThis->m_netManager = new QNetworkAccessManager();
-            LOGD("QNetworkAccessManager创建完成，开始网络请求");
-
-            // 继续执行下载逻辑
-            safeThis->continueDownload();
-        });
-    }
+    // 已在 worker 线程（run() 入口 moveToThread 过），直接 new QNAM。
+    LOGD("在 worker 线程中创建 QNetworkAccessManager");
+    m_netManager = new QNetworkAccessManager();
+    LOGD("QNetworkAccessManager创建完成，开始网络请求");
+    continueDownload();
 }
 
 void HttpWorker::continueDownload()
@@ -382,6 +376,31 @@ void HttpWorker::stopAsync()
 }
 
 /**
+ * @brief 退出 run() 内部的事件循环。
+ *  - 在 worker 线程里直接 quit()；
+ *  - 从其他线程（主线程 cancel/pause）调用时通过 invokeMethod 切到 worker 线程。
+ *  quit() 异步生效；调用方需要等 run() 返回（cancel 路径会 waitForDone）。
+ */
+void HttpWorker::quitLoop()
+{
+    if (!m_loop) {
+        return;
+    }
+    if (QThread::currentThread() == this->thread()) {
+        if (m_loop->isRunning()) {
+            m_loop->quit();
+        }
+    } else {
+        // 跨线程：把 quit 投递到 worker 线程的事件循环
+        QMetaObject::invokeMethod(this, [this]() {
+            if (m_loop && m_loop->isRunning()) {
+                m_loop->quit();
+            }
+        }, Qt::QueuedConnection);
+    }
+}
+
+/**
  * @brief 把新代理应用到 worker 的 QNAM。
  *
  * 必须在主线程调用（DownloadTask::applyProxy 的调用约定）。
@@ -403,44 +422,62 @@ void HttpWorker::setProxy(const QNetworkProxy& proxy)
     m_netManager->setProxy(proxy);
 }
 
+/**
+ * @brief 停止下载。
+ * 线程安全：
+ *  - 不论 caller 在哪个线程，都要把 m_reply 的 abort 切到 worker 线程执行
+ *    （QNetworkReply 的 abort/readAll 不是线程安全的，必须在 this->thread() 调）。
+ *  - 用 BlockingQueuedConnection 让 caller 等 worker 线程完成 abort，
+ *    避免 caller 析构 worker 时 reply 还在飞。
+ */
 void HttpWorker::stop()
 {
     LOGD("停止HttpWorker");
     m_isStopped = true;
-    
-    // 立即关闭文件（线程安全方式）
-    if (m_file && m_file->isOpen()) {
-        LOGD("立即关闭文件");
-        m_file->close();
+
+    // 立即关闭文件：QFile::close 在 worker 线程里跑（this->thread() == worker 线程），
+    // 文件对象的所有权在 worker 线程，跨线程 close 会触发 QFile 的线程警告，
+    // 所以这里只在自己线程里 close。
+    const QThread* myThread = this->thread();
+    if (QThread::currentThread() == myThread) {
+        if (m_file && m_file->isOpen()) {
+            LOGD("立即关闭文件");
+            m_file->close();
+        }
     }
 
-    // 检查当前线程是否为主线程
-    if (QThread::currentThread() == qApp->thread()) {
-        LOGD("在主线程中执行停止操作");
+    if (QThread::currentThread() == myThread) {
+        // 在 worker 线程里直接处理 reply
         if (m_reply) {
             if (m_reply->isRunning()) {
                 LOGD("直接中止网络请求并清空缓冲区");
                 m_reply->abort();
-                m_reply->readAll(); // 清空接收缓冲区
+                m_reply->readAll();
             }
             m_reply->deleteLater();
             m_reply = nullptr;
         }
+        quitLoop();
     } else {
-        LOGD("在非主线程中执行停止操作，使用线程安全方式");
+        // 从其他线程（通常是主线程）调过来，把 abort 切到 worker 线程并等返回
+        LOGD("跨线程停止HttpWorker，调度到 worker 线程");
         QMetaObject::invokeMethod(this, [this]() {
             if (m_reply) {
                 if (m_reply->isRunning()) {
-                    LOGD("通过主线程中止网络请求并清空缓冲区");
+                    LOGD("通过 worker 线程中止网络请求并清空缓冲区");
                     m_reply->abort();
-                    m_reply->readAll(); // 清空接收缓冲区
+                    m_reply->readAll();
                 }
                 m_reply->deleteLater();
                 m_reply = nullptr;
             }
-        }, Qt::QueuedConnection);
+            if (m_file && m_file->isOpen()) {
+                m_file->close();
+            }
+            quitLoop();
+        }, Qt::BlockingQueuedConnection);
     }
-    
+
     LOGD("HttpWorker完全停止");
 }
 
@@ -495,6 +532,7 @@ void HttpWorker::onFinished()
     if (m_isStopped) {
         LOGD("任务已停止，清理资源并退出");
         cleanup();
+        quitLoop();
         return;
     }
 
@@ -502,6 +540,7 @@ void HttpWorker::onFinished()
     // 置空。Qt 仍然可能把已 enqueue 的 finished 信号投递过来。
     if (!m_reply) {
         LOGD("onFinished 但 m_reply 为空，跳过处理");
+        quitLoop();
         return;
     }
 
@@ -521,6 +560,7 @@ void HttpWorker::onFinished()
 
     LOGD("开始清理资源");
     cleanup();
+    quitLoop();
     LOGD("onFinished处理完成");
 }
 
@@ -540,6 +580,7 @@ void HttpWorker::onErrorOccurred(QNetworkReply::NetworkError code)
             emit finished();
         }
         cleanup();
+        quitLoop();
         return;
     }
 
@@ -566,9 +607,11 @@ void HttpWorker::onErrorOccurred(QNetworkReply::NetworkError code)
         }
 
         // 延迟重试：通过 QTimer::singleShot(0, ...) 调度到事件循环，避免
-        // 直接在 onErrorOccurred（主线程上下文）里同步重入 run() 而把 worker
-        // 线程池调用栈打乱。重试时再次检查 m_isStopped，并在重试前清空
-        // m_file（continueDownload 会重新打开）。如果 worker 已被 stop，重试不执行。
+        // 直接在 onErrorOccurred（worker 线程上下文）里同步重入 run() 而把
+        // worker 线程池调用栈打乱。重试时再次检查 m_isStopped。如果 worker
+        // 已被 stop，重试不执行。
+        // safeThis 亲和是 worker 线程（run() 入口 moveToThread 过），
+        // QTimer 会在 worker 线程事件循环里派发。
         QPointer<HttpWorker> safeThis(this);
         QTimer::singleShot(2000 * m_retryCount, safeThis, [safeThis]() {
             if (!safeThis) {
@@ -580,8 +623,7 @@ void HttpWorker::onErrorOccurred(QNetworkReply::NetworkError code)
                 return;
             }
             LOGD("执行重试下载");
-            // 直接调用 startDownload()：startDownload 内部会判断当前线程，
-            // 非主线程会重新调度到主线程创建 QNAM（现有路径）。
+            // 已在 worker 线程，startDownload() 直接 new QNetworkAccessManager。
             safeThis->startDownload();
         });
 
@@ -597,5 +639,6 @@ void HttpWorker::onErrorOccurred(QNetworkReply::NetworkError code)
         emit error(errorString);
     }
     cleanup();
+    quitLoop();
     LOGD("onErrorOccurred处理完成");
 }
