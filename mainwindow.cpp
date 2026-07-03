@@ -402,18 +402,29 @@ void MainWindow::onNewDownloadRequestFromBrowser(const QString& url, const QStri
         fileName = "download";
     }
 
-    // 计算最终保存路径：插件传入的 savePath 为空或仅目录时，根据默认下载目录补全
+    // 计算最终保存路径：插件传入的 savePath 形态多样，按以下规则归一化
+    //  (a) 空                               -> 默认下载目录 + fileName
+    //  (b) 已存在的目录 / 以分隔符结尾     -> 该目录下拼 fileName
+    //  (c) 裸文件名（无目录分量）           -> 默认下载目录 + 该文件名
+    //  (d) 完整路径（绝对或带目录的相对路径）-> 标准化分隔符后原样使用
+    const QString defaultDir = m_settingsManager.loadDefaultDownloadPath();
     QString finalSavePath;
     if (savePath.isEmpty()) {
-        finalSavePath = m_settingsManager.loadDefaultDownloadPath() + "/" + fileName;
+        finalSavePath = QDir(defaultDir).absoluteFilePath(fileName);
     } else {
-        QFileInfo info(savePath);
-        if (info.isDir()) {
+        const QFileInfo info(savePath);
+        const bool endsWithSep = savePath.endsWith('/') || savePath.endsWith('\\');
+        if (info.isDir() || endsWithSep) {
             finalSavePath = QDir(savePath).absoluteFilePath(fileName);
+        } else if (info.fileName() == savePath) {
+            // 关键：QFileInfo::fileName() 等于整段输入，说明完全没有目录分量。
+            // HttpServer 在 savePath 为空时把 filename 兜底发过来，落入此分支。
+            finalSavePath = QDir(defaultDir).absoluteFilePath(savePath);
         } else {
-            finalSavePath = savePath;
+            finalSavePath = QDir::cleanPath(savePath);
         }
     }
+    LOGD(QString("解析 savePath:%1 -> finalSavePath:%2").arg(savePath, finalSavePath));
 
     DownloadTask* task = m_downloadManager.createTask(urlObj, finalSavePath, m_settingsManager.loadDefaultThreads());
     if (!task) {
