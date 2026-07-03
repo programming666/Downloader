@@ -305,7 +305,8 @@ private:
     QString m_filePath;                 ///< 文件保存的本地路径。
     QString m_fileName;                 ///< 文件名。
     QString m_tempDirectory;            ///< 临时文件存储目录。
-    int m_threadCount;                  ///< 下载线程数。
+    int m_threadCount;                  ///< 下载线程数（用户请求，可能被 HEAD 阶段回退）。
+    int m_createdWorkerCount = 0;       ///< 实际创建的 HttpWorker 数（被 merge/deleteTempFiles 当作 part 数快照，不会再变）。
     QThreadPool* m_threadPool;          ///< 线程池指针（来自DownloadManager，不使用globalInstance）。
     DownloadTaskStatus m_status;        ///< 当前任务状态。
 

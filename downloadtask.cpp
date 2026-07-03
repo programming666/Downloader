@@ -43,7 +43,8 @@ DownloadTask::DownloadTask(const QUrl& url, const QString& savePath, int threadC
       m_finishTime(), // 默认构造（无效 QDateTime），由完成/取消/失败路径显式设置
       m_headManager(nullptr),
       m_headReply(nullptr),
-      m_finishedWorkers(0)
+      m_finishedWorkers(0),
+      m_createdWorkerCount(0)
 {
     // 防止 m_threadCount <= 0 导致后续除零；至少给1个线程
     if (m_threadCount <= 0) {
@@ -179,6 +180,7 @@ void DownloadTask::start()
             }
             m_workers.clear();
             m_finishedWorkers = 0;
+            m_createdWorkerCount = 0;
             LOGD("worker清理完成");
         }
 
@@ -755,6 +757,7 @@ void DownloadTask::createHttpWorkers()
         connect(worker, &HttpWorker::error, this, &DownloadTask::onWorkerError);
         LOGD("单线程worker创建完成，提交到线程池...");
         m_threadPool->start(worker);
+        m_createdWorkerCount = 1;
         LOGD("单线程worker已提交到线程池");
         return;
     }
@@ -811,6 +814,10 @@ void DownloadTask::createHttpWorkers()
         LOGD(QString("worker%1已提交到线程池").arg(i));
     }
 
+    // 至此所有 clamp 已完成，m_threadCount 与实际创建的 worker 数对齐。
+    // 锁定 m_createdWorkerCount，merge/deleteTempFiles/onWorkerFinished 都用它，
+    // 不再读可能被未来路径改写的 m_threadCount。
+    m_createdWorkerCount = m_threadCount;
     LOGD("所有workers创建完成");
 }
 
@@ -856,7 +863,9 @@ void DownloadTask::onWorkerFinished()
         finishedCount = m_finishedWorkers;
 
         // 直接比较，不调用allWorkersFinished()方法
-        shouldMergeFiles = (m_finishedWorkers == m_threadCount);
+        // 用 m_createdWorkerCount（创建时的实际 part 数快照）而不是 m_threadCount，
+        // 防止未来有路径在 createHttpWorkers 返回后再改写 m_threadCount 导致永远不触发。
+        shouldMergeFiles = (m_finishedWorkers == m_createdWorkerCount);
     }
 
     LOGD(QString("worker完成，已完成worker数:%1/%2").arg(finishedCount).arg(m_threadCount));
@@ -1072,7 +1081,9 @@ bool DownloadTask::mergeFiles()
 
     qint64 totalBytesWritten = 0;
     qint64 totalTempFileSize = 0;
-    int threadCount = getThreadCount();
+    // 用创建时的实际 part 数快照（m_createdWorkerCount），而不是可能被未来路径
+    // 改写的 m_threadCount。mergeTempFile 对不存在的 part 文件会直接 return false。
+    int threadCount = m_createdWorkerCount;
 
     LOGD(QString("开始合并%1个临时文件到临时合并文件:%2").arg(threadCount).arg(tempMergeFilePath));
 
@@ -1092,8 +1103,11 @@ bool DownloadTask::mergeFiles()
     qint64 totalSize = getTotalSize();
     LOGD(QString("文件合并完成，总写入字节数:%1 临时文件总大小:%2 期望总大小:%3").arg(totalBytesWritten).arg(totalTempFileSize).arg(totalSize));
 
-    // 验证临时合并文件的大小
-    if (totalBytesWritten != totalSize) {
+    // 验证临时合并文件的大小。
+    // 当 totalSize==0 时表示 HEAD 没有给出 Content-Length，下载采用单线程 endPoint=-1 模式
+    // （整文件流式下载直到服务器关闭连接），这种情况下没有期望大小可比对，
+    // 只要 writtenBytes == tempFileSize （即多 part 一致）就视为成功。
+    if (totalSize > 0 && totalBytesWritten != totalSize) {
         LOGD(QString("临时合并文件大小与期望不符，实际:%1 期望:%2").arg(totalBytesWritten).arg(totalSize));
         QFile::remove(tempMergeFilePath);
         return false;
@@ -1106,12 +1120,13 @@ bool DownloadTask::mergeFiles()
         return false;
     }
 
-    // 验证最终文件
-    if (!validateFinalFile(totalBytesWritten, totalSize)) {
+    // 验证最终文件。totalSize==0 的情况下用总写入字节数作为期望值
+    const qint64 expectedFinalSize = (totalSize > 0) ? totalSize : totalBytesWritten;
+    if (!validateFinalFile(totalBytesWritten, expectedFinalSize)) {
         return false;
     }
 
-    updateDownloadedSize(totalSize);
+    updateDownloadedSize(expectedFinalSize);
     LOGD(QString("文件成功移动到最终位置:%1").arg(m_filePath));
 
     // 合并完成且最终文件已落盘后再删除临时分片文件，确保worker不再写时再unlink
@@ -1122,13 +1137,9 @@ bool DownloadTask::mergeFiles()
 
 void DownloadTask::deleteTempFiles()
 {
-    int threadCount;
-    
-    {
-        QMutexLocker locker(&m_mutex); // 保护m_threadCount
-        threadCount = m_threadCount;
-    }
-    
+    // 用创建时的实际 part 数快照，避免读到被未来路径改写的 m_threadCount。
+    int threadCount = m_createdWorkerCount;
+
     LOGD(QString("开始删除%1个临时文件").arg(threadCount));
     
     QString baseFileName = QFileInfo(m_filePath).fileName();
