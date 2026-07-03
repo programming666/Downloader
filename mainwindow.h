@@ -273,6 +273,14 @@ public:
     QString formatSpeed(qint64 bytesPerSecond) const;
 
     /**
+     * @brief 构造表格"大小"列的显示文本。
+     * HEAD 没拿到 Content-Length 时 totalSize=0，单独显示"未知"避免 "X / 0 B" 的违和文案。
+     * @param downloaded 已下载字节数。
+     * @param total 总字节数（0 表示未知）。
+     */
+    QString formatSizeCell(qint64 downloaded, qint64 total) const;
+
+    /**
      * @brief 在任务列表中添加一行。
      * @param task 要添加的DownloadTask指针。
      */

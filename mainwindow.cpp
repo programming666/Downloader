@@ -225,6 +225,18 @@ QString MainWindow::formatSpeed(qint64 bytesPerSecond) const
     }
 }
 
+/**
+ * @brief 构造大小列文本。
+ * HEAD 没拿到 Content-Length 时 totalSize=0，单独显示"未知"避免"5430 B/0 B"的违和文案。
+ */
+QString MainWindow::formatSizeCell(qint64 downloaded, qint64 total) const
+{
+    if (total <= 0) {
+        return formatBytes(downloaded) + "/" + tr("未知");
+    }
+    return formatBytes(downloaded) + "/" + formatBytes(total);
+}
+
 void MainWindow::addTaskToTable(DownloadTask* task)
 {
     LOGD(QString("开始将任务添加到表格 - 任务:%1").arg(task ? task->fileName() : "空"));
@@ -262,7 +274,7 @@ void MainWindow::addTaskToTable(DownloadTask* task)
 
     // 大小
     LOGD("创建大小标签");
-    QLabel* sizeLabel = new QLabel(formatBytes(task->downloadedSize()) + "/" + formatBytes(task->totalSize()), this);
+    QLabel* sizeLabel = new QLabel(formatSizeCell(task->downloadedSize(), task->totalSize()), this);
     sizeLabel->setAlignment(Qt::AlignCenter);
     sizeLabel->setToolTip(tr("已下载: %1\n总大小: %2").arg(formatBytes(task->downloadedSize())).arg(formatBytes(task->totalSize())));
     ui->tableWidget->setCellWidget(row, 3, sizeLabel);
@@ -321,7 +333,7 @@ void MainWindow::updateTaskInTable(DownloadTask* task)
             // 更新大小
             QLabel* sizeLabel = qobject_cast<QLabel*>(ui->tableWidget->cellWidget(row, 3));
             if (sizeLabel) {
-                QString sizeText = formatBytes(task->downloadedSize()) + "/" + formatBytes(task->totalSize());
+                const QString sizeText = formatSizeCell(task->downloadedSize(), task->totalSize());
                 sizeLabel->setText(sizeText);
                 sizeLabel->setToolTip(tr("已下载: %1\n总大小: %2").arg(formatBytes(task->downloadedSize())).arg(formatBytes(task->totalSize())));
             }
