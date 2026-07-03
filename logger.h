@@ -129,7 +129,7 @@ static void logToFile(const QString& message) {
     if (!getLogStream(f, ts) || !f || !ts) {
         return;
     }
-    QMutexLocker locker(&logMutex());
+    // 假设调用方已持 logMutex()，此处不再加锁（避免与 LOGD 宏的双重锁死锁）。
     *ts << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz ")
         << message << "\n";
     ts->flush();
