@@ -419,24 +419,28 @@ int DownloadTask::progressPercentage() const
 {
     qint64 totalSize;
     qint64 downloadedSize;
-    
+    qint64 workerBytes;
+
     {
         QMutexLocker locker(&m_mutex); // 保护m_totalSize和m_downloadedSize
         totalSize = m_totalSize;
         downloadedSize = m_downloadedSize;
+        workerBytes = m_bytesReceivedByWorkers;
     }
-    
-    if (totalSize <= 0) {
-        return 0;
+
+    if (totalSize > 0) {
+        // 正常路径：有 Content-Length，按已下载字节 / 总大小算。
+        if (downloadedSize >= totalSize) return 100;
+        if (downloadedSize <= 0) return 0;
+        return static_cast<int>((downloadedSize * 100) / totalSize);
     }
-    // 使用整数数学避免 double 精度损失（极大文件时 double 转 int 会丢精度）
-    if (downloadedSize >= totalSize) {
-        return 100;
-    }
-    if (downloadedSize <= 0) {
-        return 0;
-    }
-    return static_cast<int>((downloadedSize * 100) / totalSize);
+    // HEAD 没返回 Content-Length（endPoint=-1 单线程流式下载）：进度条无法
+    // 用百分比表达，但仍可以基于 worker 累计字节估算一个"看起来在动"的
+    // 百分比。下载一个完整大文件至少会跨 MB 级别，按 1MB 折算成 1 个百分点
+    // 上限 99，让 UI 不再像"卡死在 0%"。最终合并完成后 size 列会显示真实字节。
+    if (workerBytes <= 0) return 0;
+    const qint64 percent = workerBytes / (1024 * 1024);
+    return percent > 99 ? 99 : static_cast<int>(percent);
 }
 
 void DownloadTask::setStatus(DownloadTaskStatus newStatus)
@@ -752,9 +756,12 @@ void DownloadTask::createHttpWorkers()
              .arg(tempFilePath).arg(endPoint));
         HttpWorker* worker = new HttpWorker(m_url, tempFilePath, 0, endPoint);
         m_workers.append(worker);
-        connect(worker, &HttpWorker::progress, this, &DownloadTask::onWorkerProgress);
-        connect(worker, &HttpWorker::finished, this, &DownloadTask::onWorkerFinished);
-        connect(worker, &HttpWorker::error, this, &DownloadTask::onWorkerError);
+        // worker 跑在自己的线程上（HttpWorker::run() 入口 moveToThread），
+        // 强制 QueuedConnection 让 progress/finished/error 信号投回主线程的 DownloadTask 槽，
+        // 避免 auto-detect 把信号在 worker 线程同步派发到主线程对象导致跨线程访问。
+        connect(worker, &HttpWorker::progress, this, &DownloadTask::onWorkerProgress, Qt::QueuedConnection);
+        connect(worker, &HttpWorker::finished, this, &DownloadTask::onWorkerFinished, Qt::QueuedConnection);
+        connect(worker, &HttpWorker::error, this, &DownloadTask::onWorkerError, Qt::QueuedConnection);
         LOGD("单线程worker创建完成，提交到线程池...");
         m_threadPool->start(worker);
         m_createdWorkerCount = 1;
@@ -805,9 +812,11 @@ void DownloadTask::createHttpWorkers()
         HttpWorker* worker = new HttpWorker(m_url, tempFilePath, startPoint, endPoint);
         m_workers.append(worker);
 
-        connect(worker, &HttpWorker::progress, this, &DownloadTask::onWorkerProgress);
-        connect(worker, &HttpWorker::finished, this, &DownloadTask::onWorkerFinished);
-        connect(worker, &HttpWorker::error, this, &DownloadTask::onWorkerError);
+        // worker 跑在自己的线程上（HttpWorker::run() 入口 moveToThread），
+        // 强制 QueuedConnection 让 progress/finished/error 信号投回主线程的 DownloadTask 槽。
+        connect(worker, &HttpWorker::progress, this, &DownloadTask::onWorkerProgress, Qt::QueuedConnection);
+        connect(worker, &HttpWorker::finished, this, &DownloadTask::onWorkerFinished, Qt::QueuedConnection);
+        connect(worker, &HttpWorker::error, this, &DownloadTask::onWorkerError, Qt::QueuedConnection);
 
         LOGD(QString("worker%1创建完成，提交到线程池...").arg(i));
         m_threadPool->start(worker);
@@ -960,6 +969,7 @@ void DownloadTask::onSpeedCalculationTimerTimeout()
 {
     qint64 downloadedSize;
     qint64 downloadSpeed;
+    qint64 totalSize;
 
     {
         QMutexLocker locker(&m_mutex); // 保护m_downloadedSize和m_lastDownloadedSize
@@ -969,13 +979,25 @@ void DownloadTask::onSpeedCalculationTimerTimeout()
         m_downloadSpeed = delta > 0 ? delta : 0;
         m_lastDownloadedSize = m_downloadedSize;
 
+        // 累计 worker 实际写入字节，给 HEAD 没拿到 Content-Length 的场景
+        // 提供"已下载多少"的量化（不依赖 m_downloadedSize 增量，避免被
+        // merge 阶段的 updateDownloadedSize 干扰）。
+        qint64 workerSum = 0;
+        for (const HttpWorker* w : std::as_const(m_workers)) {
+            if (w) workerSum += w->bytesReceivedAtomic();
+        }
+        m_bytesReceivedByWorkers = workerSum;
+
         // Copy values to local variables before releasing the mutex
         downloadedSize = m_downloadedSize;
         downloadSpeed = m_downloadSpeed;
+        totalSize = m_totalSize;
     }
 
     // Emit signal outside of mutex lock to avoid potential deadlocks
-    emit progressUpdated(downloadedSize, m_totalSize, downloadSpeed);
+    // HEAD 没给 Content-Length 时 m_totalSize==0，progressPercentage() 仍返 0，
+    // 但 MainWindow 大小列现在可以基于 m_bytesReceivedByWorkers 显示已下载字节数。
+    emit progressUpdated(downloadedSize, totalSize, downloadSpeed);
 }
 
 bool DownloadTask::allWorkersFinished() const

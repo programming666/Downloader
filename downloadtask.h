@@ -312,6 +312,7 @@ private:
 
     qint64 m_totalSize;                 ///< 文件总大小。
     qint64 m_downloadedSize;            ///< 已下载大小。
+    qint64 m_bytesReceivedByWorkers = 0;///< worker 累计已写入磁盘字节（由 200ms 定时器刷新；HEAD 拿不到 Content-Length 时也能量化"已下载多少"）。
     qint64 m_lastDownloadedSize;        ///< 上次计算速度时的已下载大小。
     qint64 m_downloadSpeed;             ///< 当前下载速度。
     QDateTime m_startTime;              ///< 任务开始时间。
