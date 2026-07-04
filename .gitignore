@@ -75,3 +75,9 @@ installer/
 # 浏览器扩展产物（源码在 插件/，以下为打包/签名残留）
 *.crx
 *.pem
+
+# 本地端到端测试数据/产物（test_anti_range_server.py 留作可复用的脚本）
+test_anti_range.dat
+
+# 浏览器插件打包产物的 zip（含已打包扩展的本地分发，体积大且可重建）
+插件.zip
