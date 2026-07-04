@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QFile>
+#include <QMutex>
 
 /**
  * @brief DownloadRecord结构体用于存储单个下载任务的历史记录信息。
@@ -93,6 +94,7 @@ private:
 
     QString m_historyFilePath; ///< JSON文件路径
     QList<DownloadRecord> m_records; ///< 内存中的历史记录列表
+    mutable QMutex m_historyMutex; ///< 保护m_records与文件IO的互斥锁
 
     /**
      * @brief 初始化JSON文件路径并加载历史记录。
@@ -107,10 +109,17 @@ private:
     bool loadHistory();
 
     /**
-     * @brief 保存历史记录到JSON文件。
+     * @brief 保存历史记录到JSON文件（原子写入：tmp + rename）。
      * @return 如果保存成功则返回true，否则返回false。
      */
     bool saveHistory();
+
+    /**
+     * @brief 当JSON文件无法读取时，通过原子重命名为 .bak 并重试。
+     * @return true 表示成功恢复（不论是原始文件还是重命名后的文件）；
+     *         false 表示恢复失败，调用方应放弃加载历史。
+     */
+    bool recoverFromOpenFailure();
 };
 
 #endif // HISTORYMANAGER_H

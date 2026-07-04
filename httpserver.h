@@ -65,10 +65,7 @@ signals:
     void serverStarted();
 
 private slots:
-#if USE_QHTTPSERVER
-    // 使用 QHttpServer 的处理函数
-#else
-    // 使用 QTcpServer 的处理函数
+#if !USE_QHTTPSERVER
     /**
      * @brief 处理新的客户端连接。
      */
@@ -83,22 +80,32 @@ private slots:
      * @brief 处理客户端断开连接。
      */
     void onClientDisconnected();
-    
+
     /**
      * @brief 解析HTTP请求并发送响应。
-     * @param data HTTP请求数据
-     * @param clientSocket 客户端套接字
+     * @param clientSocket 客户端套接字（buffer 由 m_buffers 取）。
+     * @return true 表示本次请求已发出响应，调用方可以继续消费 pipeline 后续请求；
+     *         false 表示已经安排关闭连接，调用方应停止继续读 buffer。
      */
-    void processHttpRequest(const QByteArray &data, QTcpSocket *clientSocket);
+    bool processHttpRequest(QTcpSocket *clientSocket);
 #endif
 
 private:
 #if USE_QHTTPSERVER
-    QHttpServer* m_httpServer; ///< HTTP服务器实例。
-    QList<QTcpServer*> m_tcpServers; ///< 绑定的TCP服务器列表。
+    QHttpServer* m_httpServer;            ///< HTTP服务器实例。
+    QTcpServer*  m_listenServer = nullptr; ///< 实际监听的QTcpServer，由startServer创建/释放。
 #else
-    QTcpServer* m_tcpServer; ///< TCP服务器实例。
+    QTcpServer*  m_tcpServer = nullptr;    ///< TCP服务器实例（fallback实现）。
+    QHash<QTcpSocket*, QByteArray> m_buffers; ///< 每个客户端的累积缓冲区。
+    QHash<QTcpSocket*, QTimer*>    m_idleTimers; ///< 每个客户端的空闲超时定时器。
 #endif
+
+    // 大小常量（fallback实现使用）
+    static constexpr int MAX_BODY_SIZE     = 1 * 1024 * 1024;   ///< 请求体上限 1 MiB
+    static constexpr int MAX_BUFFER_SIZE   = 2 * 1024 * 1024;   ///< 客户端累积缓冲上限 2 MiB
+    static constexpr int IDLE_TIMEOUT_MS   = 30 * 1000;         ///< 慢速客户端 30s 空闲超时
+    static constexpr int CLOSE_GRACE_MS    = 100;               ///< bytesWritten 之后的优雅断开延迟
+    static constexpr int MAX_PENDING_CONNS = 64;                ///< Slowloris 防御
 };
 
 #endif // HTTPSERVER_H

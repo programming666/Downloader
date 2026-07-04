@@ -1,30 +1,31 @@
 #include "mainwindow.h"
 #include "settingsmanager.h"
 #include "historymanager.h"
+#include "schedulemanager.h"
+#include "downloadmanager.h"
 #include "httpserver.h" // 包含HttpServer头文件
 #include "logger.h"
 
 #include <QApplication>
-#include <QTranslator>
 #include <QLocale>
 #include <QDebug>
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QTimer>
 /**
  * @brief 应用程序主入口函数
  * @param argc 命令行参数个数
  * @param argv 命令行参数数组
  * @return 应用程序退出码
- * 
+ *
  * 主函数负责：
  * 1. 创建QApplication实例
  * 2. 设置应用程序元数据（组织名称、应用名称）
  * 3. 初始化单例管理器（设置、历史记录）
- * 4. 加载国际化翻译文件
- * 5. 创建并显示主窗口
- * 6. 启动本地服务器接收浏览器插件请求
- * 7. 进入Qt事件循环
+ * 4. 创建并显示主窗口（翻译器由 MainWindow 接管）
+ * 5. 启动本地服务器接收浏览器插件请求
+ * 6. 进入Qt事件循环
  */
 int main(int argc, char *argv[])
 {
@@ -35,72 +36,69 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName("Programming666");
     QCoreApplication::setApplicationName("Downloader");
 
-    // 初始化SettingsManager和HistoryManager单例
-    // 确保在程序早期初始化，避免后续使用时的竞态条件
+    // 初始化单例管理器（按依赖顺序预热，避免后续使用时的竞态条件）
+    // 顺序：SettingsManager (基础) -> HistoryManager (依赖 settings) ->
+    //       ScheduleManager (依赖 settings) -> DownloadManager (依赖所有)
     SettingsManager::instance();
     HistoryManager::instance();
+    ScheduleManager::instance();
+    DownloadManager::instance();
 
-    // 加载国际化翻译文件
-    // 根据系统语言环境自动选择中文或英文界面
-    QTranslator translator;
-    QString locale = QLocale::system().name(); // 获取系统语言环境
-    LOGD(QString("System locale: %1").arg(locale));
-
-    // 尝试加载中文翻译（系统语言为中文时）
-    if (locale.startsWith("zh")) {
-        if (translator.load(":/translations/zh_CN.qm")) {
-            a.installTranslator(&translator);
-            LOGD("Loaded Chinese translation from resources.");
-        } else {
-            // 资源文件加载失败时，尝试从应用程序目录加载
-            QString appDir = QCoreApplication::applicationDirPath();
-            if (translator.load(appDir + "/translations/zh_CN.qm")) {
-                a.installTranslator(&translator);
-                LOGD("Loaded Chinese translation from application directory.");
-            } else if (translator.load("translations/zh_CN.qm")) {
-                a.installTranslator(&translator);
-                LOGD("Loaded Chinese translation from current directory.");
-            } else {
-                LOGD("Failed to load Chinese translation file.");
-            }
-        }
-    } else {
-        // 非中文系统，加载英文翻译
-        if (translator.load(":/translations/en_US.qm")) {
-            a.installTranslator(&translator);
-            LOGD("Loaded English translation from resources.");
-        } else {
-            // 资源文件加载失败时，尝试从应用程序目录加载
-            QString appDir = QCoreApplication::applicationDirPath();
-            if (translator.load(appDir + "/translations/en_US.qm")) {
-                a.installTranslator(&translator);
-                LOGD("Loaded English translation from application directory.");
-            } else if (translator.load("translations/en_US.qm")) {
-                a.installTranslator(&translator);
-                LOGD("Loaded English translation from current directory.");
-            } else {
-                LOGD("Failed to load English translation.");
-            }
+    // 翻译器由 MainWindow 接管：MainWindow 构造时会根据系统语言加载并 install，
+    // 后续用户切换语言也由 MainWindow 统一管理（QTranslator 生命周期由 m_translator 持有）。
+    // 若翻译加载失败应当输出警告（之前默认悄无声息地回退到英文）。
+    {
+        QTranslator probeTranslator;
+        bool loaded = probeTranslator.load(QString(":/i18n/%1.qm").arg(QLocale::system().name()));
+        if (!loaded) {
+            qWarning() << "Translation file for locale"
+                       << QLocale::system().name()
+                       << "not found; UI will fall back to source language.";
         }
     }
+    LOGD(QString("System locale: %1").arg(QLocale::system().name()));
 
     // 创建并显示主窗口
     MainWindow w;
     w.show();
 
     // 启动HTTP服务器，接收浏览器插件的下载请求
-    HttpServer httpServer;
+    // 使用堆对象并以主窗口为父对象，确保释放顺序：HttpServer 在 MainWindow 之前析构
+    HttpServer* httpServer = new HttpServer(&w);
     quint16 listenPort = SettingsManager::instance().loadLocalListenPort();
-    if (!httpServer.startServer(listenPort)) {
+    if (!httpServer->startServer(listenPort)) {
         qCritical() << "Failed to start HTTP server on port" << listenPort;
     } else {
         LOGD(QString("HTTP server listening on port %1").arg(listenPort));
     }
-    
+
     // 连接HTTP服务器信号到主窗口槽函数
     // 当浏览器插件发送下载请求时，主窗口会弹出新建任务对话框
-    QObject::connect(&httpServer, &HttpServer::newDownloadRequest,
+    QObject::connect(httpServer, &HttpServer::newDownloadRequest,
                      &w, &MainWindow::onNewDownloadRequestFromBrowser);
+
+    // 端到端测试钩子：DOWNLOADER_AUTO_PAUSE_MS=N 启动后 N 毫秒自动 pause
+    // 第一个 Downloading 任务，便于 headless 复现"暂停选中"路径的 UI 响应。
+    // 生产环境不设置该环境变量即可维持原行为。
+    const QByteArray autoPauseMs = qgetenv("DOWNLOADER_AUTO_PAUSE_MS");
+    if (!autoPauseMs.isEmpty()) {
+        bool ok = false;
+        const int ms = autoPauseMs.toInt(&ok);
+        if (ok && ms > 0) {
+            QObject::connect(&DownloadManager::instance(), &DownloadManager::taskAdded,
+                             &a, [ms](DownloadTask* task) {
+                LOGD(QString("DOWNLOADER_AUTO_PAUSE_MS: 调度 %1ms 后 pause task %2")
+                     .arg(ms).arg(task->fileName()));
+                QTimer::singleShot(ms, qApp, [task]() {
+                    LOGD(QString("DOWNLOADER_AUTO_PAUSE_MS: 触发 pause task %1").arg(task->fileName()));
+                    DownloadManager::instance().pauseTask(task);
+                    LOGD(QString("DOWNLOADER_AUTO_PAUSE_MS: pauseTask 返回 task=%1").arg(task->fileName()));
+                });
+            });
+            qInfo() << "DOWNLOADER_AUTO_PAUSE_MS:" << ms
+                    << "- pause first Downloading task after that delay";
+        }
+    }
 
     // 进入Qt事件循环，等待用户交互和系统事件
     // 应用程序将保持运行状态，直到用户选择退出

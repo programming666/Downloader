@@ -150,46 +150,49 @@ bool HistoryManager::initJsonFile()
 bool HistoryManager::loadHistory()
 {
     LOGD("[HistoryManager::loadHistory] 开始加载历史记录");
-    
+
     QFile file(m_historyFilePath);
     if (!file.exists()) {
         LOGD("[HistoryManager::loadHistory] JSON文件不存在，将创建新文件");
         m_records.clear();
         return true;
     }
-    
+
     if (!file.open(QIODevice::ReadOnly)) {
         LOGD(QString("[HistoryManager::loadHistory] 无法打开JSON文件:%1").arg(file.errorString()));
-        // 无法打开文件时，清空文件内容
-        LOGD("[HistoryManager::loadHistory] 清空JSON文件内容");
-        file.close();
-        m_records.clear();
-        saveHistory(); // 创建空的JSON文件
-        return true;
+        // 文件存在但打不开（例如权限、文件锁）。先尝试把它原子重命名到 .bak 再重试一次，
+        // 以避免任何覆盖式"清空"把可能仍可读的旧数据毁掉。
+        if (recoverFromOpenFailure()) {
+            return true;
+        }
+        // 实在打不开，记录失败但保留内存中已有的内容。
+        LOGD("[HistoryManager::loadHistory] 恢复失败，保留当前内存记录");
+        return false;
     }
-    
+
     QByteArray data = file.readAll();
     file.close();
-    
+
     // 如果文件为空，返回空列表
     if (data.isEmpty()) {
         LOGD("[HistoryManager::loadHistory] JSON文件为空");
         m_records.clear();
         return true;
     }
-    
+
     QJsonDocument doc = QJsonDocument::fromJson(data);
     if (doc.isNull() || !doc.isArray()) {
-        LOGD("[HistoryManager::loadHistory] JSON文件格式错误或不是数组，将清空文件");
-        // 格式错误时，清空文件并返回空列表
+        LOGD("[HistoryManager::loadHistory] JSON文件格式错误或不是数组，尝试备份并清空");
+        // 损坏的JSON: 把它重命名到 .bak 备份后再清空，避免完全丢失。
+        QFile::rename(m_historyFilePath, m_historyFilePath + ".bak");
         m_records.clear();
         saveHistory(); // 创建空的JSON文件
         return true;
     }
-    
+
     QJsonArray array = doc.array();
     m_records.clear();
-    
+
     for (const QJsonValue& value : array) {
         if (value.isObject()) {
             try {
@@ -201,8 +204,28 @@ bool HistoryManager::loadHistory()
             }
         }
     }
-    
+
     LOGD(QString("[HistoryManager::loadHistory] 历史记录加载成功，共%1条记录").arg(m_records.size()));
+    return true;
+}
+
+bool HistoryManager::recoverFromOpenFailure()
+{
+    const QString backupPath = m_historyFilePath + ".bak";
+    // 先把损坏/锁住的文件改名保留，避免覆盖丢失。
+    QFile original(m_historyFilePath);
+    if (original.exists()) {
+        // 先把已有的 .bak 清掉，避免冲突
+        QFile::remove(backupPath);
+        if (!QFile::rename(m_historyFilePath, backupPath)) {
+            LOGD(QString("[HistoryManager::recoverFromOpenFailure] 无法重命名损坏文件到 %1").arg(backupPath));
+            return false;
+        }
+        LOGD(QString("[HistoryManager::recoverFromOpenFailure] 已把不可读文件重命名为 %1").arg(backupPath));
+    }
+    // 重命名成功，文件已经被移走；直接当作空列表处理。
+    m_records.clear();
+    saveHistory(); // 写入一个新的空文件作为新的起点
     return true;
 }
 
@@ -213,24 +236,60 @@ bool HistoryManager::loadHistory()
 bool HistoryManager::saveHistory()
 {
     LOGD("[HistoryManager::saveHistory] 开始保存历史记录");
-    
+
     QJsonArray array;
-    for (const DownloadRecord& record : m_records) {
-        array.append(record.toJson());
+    {
+        QMutexLocker locker(&m_historyMutex);
+        for (const DownloadRecord& record : m_records) {
+            array.append(record.toJson());
+        }
     }
-    
+
     QJsonDocument doc(array);
-    QFile file(m_historyFilePath);
-    
-    if (!file.open(QIODevice::WriteOnly)) {
-        LOGD(QString("[HistoryManager::saveHistory] 无法打开JSON文件:%1").arg(file.errorString()));
+    const QByteArray payload = doc.toJson();
+
+    // 原子写入：写到 .tmp，fsync，rename 覆盖目标文件。
+    const QString tmpPath = m_historyFilePath + ".tmp";
+    QFile tmpFile(tmpPath);
+    if (!tmpFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        LOGD(QString("[HistoryManager::saveHistory] 无法打开临时文件:%1").arg(tmpFile.errorString()));
         return false;
     }
-    
-    file.write(doc.toJson());
-    file.close();
-    
-    LOGD(QString("[HistoryManager::saveHistory] 历史记录保存成功，共%1条记录").arg(m_records.size()));
+    try {
+        if (tmpFile.write(payload) != payload.size()) {
+            LOGD(QString("[HistoryManager::saveHistory] 写入临时文件失败: %1").arg(tmpFile.errorString()));
+            tmpFile.close();
+            QFile::remove(tmpPath);
+            return false;
+        }
+        if (!tmpFile.flush()) {
+            LOGD("[HistoryManager::saveHistory] flush失败");
+            tmpFile.close();
+            QFile::remove(tmpPath);
+            return false;
+        }
+        tmpFile.close();
+        // 替换原文件
+        QFile::remove(m_historyFilePath);
+        if (!QFile::rename(tmpPath, m_historyFilePath)) {
+            LOGD(QString("[HistoryManager::saveHistory] 重命名 %1 -> %2 失败")
+                     .arg(tmpPath, m_historyFilePath));
+            QFile::remove(tmpPath);
+            return false;
+        }
+    } catch (const std::exception& e) {
+        LOGD(QString("[HistoryManager::saveHistory] 异常:%1").arg(e.what()));
+        tmpFile.close();
+        QFile::remove(tmpPath);
+        return false;
+    } catch (...) {
+        LOGD("[HistoryManager::saveHistory] 未知异常");
+        tmpFile.close();
+        QFile::remove(tmpPath);
+        return false;
+    }
+
+    LOGD(QString("[HistoryManager::saveHistory] 历史记录保存成功，共%1条记录").arg(array.size()));
     return true;
 }
 
@@ -259,23 +318,32 @@ bool HistoryManager::addRecord(const DownloadRecord& record)
     LOGD(QString("[HistoryManager::addRecord]   结束时间:%1").arg(record.finishTime.toString()));
     LOGD(QString("[HistoryManager::addRecord]   状态:%1").arg(record.status));
     LOGD(QString("[HistoryManager::addRecord]   文件名:%1").arg(record.fileName));
-    
-    // 添加到内存列表
-    m_records.append(record);
-    
-    // 保存到JSON文件
+
+    // 校验URL非空，避免污染历史。
+    if (record.url.trimmed().isEmpty()) {
+        LOGD("[HistoryManager::addRecord] 拒绝空URL记录");
+        return false;
+    }
+
+    {
+        QMutexLocker locker(&m_historyMutex);
+        m_records.append(record);
+    }
+
     if (!saveHistory()) {
         LOGD("[HistoryManager::addRecord] 保存历史记录失败");
+        QMutexLocker locker(&m_historyMutex);
         m_records.removeLast(); // 回滚内存中的记录
         return false;
     }
-    
+
     LOGD(QString("[HistoryManager::addRecord] 记录添加成功，URL:%1").arg(record.url));
     return true;
 }
 
 QList<DownloadRecord> HistoryManager::getHistory() const
 {
+    QMutexLocker locker(&m_historyMutex);
     LOGD(QString("[HistoryManager::getHistory] 返回历史记录，共%1条记录").arg(m_records.size()));
     return m_records;
 }
@@ -288,21 +356,22 @@ QList<DownloadRecord> HistoryManager::getHistory() const
 bool HistoryManager::deleteRecord(int index)
 {
     LOGD(QString("[HistoryManager::deleteRecord] 开始删除历史记录，索引:%1").arg(index));
-    
-    if (index < 0 || index >= m_records.size()) {
-        LOGD(QString("[HistoryManager::deleteRecord] 索引超出范围:%1").arg(index));
-        return false;
+
+    {
+        QMutexLocker locker(&m_historyMutex);
+        if (index < 0 || index >= m_records.size()) {
+            LOGD(QString("[HistoryManager::deleteRecord] 索引超出范围:%1").arg(index));
+            return false;
+        }
+        // 从内存列表中删除
+        m_records.removeAt(index);
     }
-    
-    // 从内存列表中删除
-    m_records.removeAt(index);
-    
-    // 保存到JSON文件
+
     if (!saveHistory()) {
         LOGD("[HistoryManager::deleteRecord] 保存历史记录失败");
         return false;
     }
-    
+
     LOGD("[HistoryManager::deleteRecord] 历史记录删除成功");
     return true;
 }
@@ -310,16 +379,17 @@ bool HistoryManager::deleteRecord(int index)
 bool HistoryManager::clearHistory()
 {
     LOGD("[HistoryManager::clearHistory] 开始清空历史记录");
-    
-    // 清空内存列表
-    m_records.clear();
-    
-    // 保存到JSON文件
+
+    {
+        QMutexLocker locker(&m_historyMutex);
+        m_records.clear();
+    }
+
     if (!saveHistory()) {
         LOGD("[HistoryManager::clearHistory] 保存历史记录失败");
         return false;
     }
-    
+
     LOGD("[HistoryManager::clearHistory] 历史记录清空成功");
     return true;
 }

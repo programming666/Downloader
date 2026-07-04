@@ -1,3 +1,10 @@
-log_path=D:/LOG/downloader.log
+# 日志配置
+#
+# log_path 留空：logger.h 默认按 QStandardPaths::AppDataLocation/logs/downloader.log
+# 解析，跨平台可用（不再硬编码 D:/LOG/）。
+# 如需手动指定，写绝对路径，例如：
+#   log_path=C:/Users/<you>/AppData/Local/Programming666/Downloader/logs/downloader.log
+[log]
+log_path=
 log_level=INFO
 append=true

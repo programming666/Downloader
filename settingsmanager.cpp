@@ -1,6 +1,7 @@
 #include "settingsmanager.h"
 #include <QStandardPaths>
 #include <QDir>
+#include <QUuid>
 #include "logger.h"
 // 初始化设置键常量
 const QString SettingsManager::GROUP_NETWORK = "Network";
@@ -22,6 +23,12 @@ const QString SettingsManager::KEY_LOCAL_LISTEN_PORT = "ListenPort";
 
 const QString SettingsManager::GROUP_NOTIFICATION = "Notification";
 const QString SettingsManager::KEY_SILENT_MODE = "SilentMode";
+
+const QString SettingsManager::GROUP_SECURITY = "Security";
+const QString SettingsManager::KEY_BEARER_TOKEN = "BearerToken";
+
+const QString SettingsManager::GROUP_META = "Meta";
+const QString SettingsManager::KEY_SCHEMA_VERSION = "SchemaVersion";
 
 /**
  * @brief 设置管理器构造函数
@@ -46,6 +53,12 @@ SettingsManager::SettingsManager(QObject *parent)
     // HKEY_CURRENT_USER\Software\Programming666\Downloader
     m_settings = new QSettings(this);
     LOGD("SettingsManager: 使用注册表存储设置");
+
+    // 启动时执行一次版本迁移
+    migrate();
+
+    // 首次启动确保存在bearer token。
+    bearerToken();
 }
 
 SettingsManager::~SettingsManager()
@@ -80,6 +93,9 @@ void SettingsManager::saveProxy(ProxyType type, const QNetworkProxy& proxy)
         m_settings->setValue(KEY_PROXY_PASS, proxy.password());
     }
     m_settings->endGroup();
+    // 立即刷新到磁盘，避免崩溃时丢失配置
+    m_settings->sync();
+    emit settingsChanged();
 }
 
 /**
@@ -117,7 +133,9 @@ void SettingsManager::saveTheme(const QString& themeName)
     m_settings->beginGroup(GROUP_UI);
     m_settings->setValue(KEY_THEME, themeName);
     m_settings->endGroup();
+    m_settings->sync(); // 立即刷新到磁盘
     emit themeChanged(themeName); // 发射信号通知主题已改变
+    emit settingsChanged();       // 通知其它监听方设置已变更
 }
 
 QString SettingsManager::loadTheme() const
@@ -133,6 +151,8 @@ void SettingsManager::saveDefaultDownloadPath(const QString& path)
     m_settings->beginGroup(GROUP_DOWNLOAD);
     m_settings->setValue(KEY_DEFAULT_PATH, path);
     m_settings->endGroup();
+    m_settings->sync();
+    emit settingsChanged();
 }
 
 /**
@@ -177,6 +197,8 @@ void SettingsManager::saveDefaultThreads(int threads)
     m_settings->beginGroup(GROUP_DOWNLOAD);
     m_settings->setValue(KEY_DEFAULT_THREADS, threads);
     m_settings->endGroup();
+    m_settings->sync();
+    emit settingsChanged();
 }
 
 /**
@@ -200,6 +222,9 @@ void SettingsManager::saveLocalListenPort(quint16 port)
     m_settings->beginGroup(GROUP_LOCAL_SERVER);
     m_settings->setValue(KEY_LOCAL_LISTEN_PORT, port);
     m_settings->endGroup();
+    m_settings->sync();
+    // 端口变更需要重启监听服务才生效，但仍发出广播以触发任何监听方刷新
+    emit settingsChanged();
 }
 
 quint16 SettingsManager::loadLocalListenPort() const
@@ -215,6 +240,54 @@ void SettingsManager::saveSilentMode(bool silent)
     m_settings->beginGroup(GROUP_NOTIFICATION);
     m_settings->setValue(KEY_SILENT_MODE, silent);
     m_settings->endGroup();
+    m_settings->sync();
+    emit settingsChanged();
+}
+
+QString SettingsManager::bearerToken()
+{
+    m_settings->beginGroup(GROUP_SECURITY);
+    QString token = m_settings->value(KEY_BEARER_TOKEN).toString();
+    if (token.isEmpty()) {
+        // 第一次访问时生成一个随机的UUID token并持久化
+        token = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        m_settings->setValue(KEY_BEARER_TOKEN, token);
+        m_settings->sync();
+        LOGD("SettingsManager: 生成新的bearer token");
+    }
+    m_settings->endGroup();
+    return token;
+}
+
+void SettingsManager::setBearerToken(const QString& token)
+{
+    m_settings->beginGroup(GROUP_SECURITY);
+    m_settings->setValue(KEY_BEARER_TOKEN, token);
+    m_settings->endGroup();
+    m_settings->sync();
+}
+
+void SettingsManager::migrate()
+{
+    // 读取当前存储的schema版本
+    m_settings->beginGroup(GROUP_META);
+    const int stored = m_settings->value(KEY_SCHEMA_VERSION, 0).toInt();
+    m_settings->endGroup();
+
+    if (stored >= CURRENT_SCHEMA_VERSION) {
+        return;
+    }
+
+    LOGD(QString("SettingsManager: 运行迁移 schema %1 -> %2")
+             .arg(stored).arg(CURRENT_SCHEMA_VERSION));
+
+    // 未来版本的迁移步骤放在这里。当前仅需要把版本号写入即可。
+    // 例如：v0 -> v1 时可以把boolean统一迁移为原生bool类型等。
+
+    m_settings->beginGroup(GROUP_META);
+    m_settings->setValue(KEY_SCHEMA_VERSION, CURRENT_SCHEMA_VERSION);
+    m_settings->endGroup();
+    m_settings->sync();
 }
 
 bool SettingsManager::loadSilentMode() const

@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE TS>
 <TS version="2.1" language="en_US">
+<!--
+  English (United States) translation.
+
+  Translator notes have moved to TRANSLATOR_NOTES.md (same directory).
+  Do NOT add a top-level <translatorcomment> block to this .ts file —
+  lrelease does not recognize that element and will fail with
+  "Unexpected tag <translatorcomment>".
+-->
 <context>
     <name>DownloadTask</name>
     <message>
@@ -266,72 +274,86 @@
     <message>
         <location filename="../mainwindow.cpp" line="98"/>
         <source>文件名</source>
+        <extracomment>Table column header — File name. Keep under 12 English characters.</extracomment>
         <translation>File Name</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="98"/>
         <source>URL</source>
+        <extracomment>Table column header — URL. Do NOT translate.</extracomment>
         <translation>URL</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="98"/>
         <source>进度</source>
+        <extracomment>Table column header — Progress (percentage bar).</extracomment>
         <translation>Progress</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="98"/>
         <source>大小</source>
+        <extracomment>Table column header — File size (bytes).</extracomment>
         <translation>Size</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="98"/>
         <source>速度</source>
+        <extracomment>Table column header — Current transfer speed.</extracomment>
         <translation>Speed</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="98"/>
         <source>状态</source>
+        <extracomment>Table column header — Task status (see "等待中"/"下载中"/etc. below).</extracomment>
         <translation>Status</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="98"/>
         <source>操作</source>
+        <extracomment>Table column header — Per-row action buttons (pause / resume / cancel).</extracomment>
         <translation>Actions</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="74"/>
         <source>准备就绪</source>
+        <extracomment>Initial status-bar message shown when the app has no tasks.</extracomment>
         <translation>Ready</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="142"/>
         <location filename="../mainwindow.cpp" line="188"/>
         <source>等待中</source>
+        <extracomment>Task state — Pending: queued but not yet started.</extracomment>
         <translation>Pending</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="189"/>
         <source>下载中</source>
+        <extracomment>Task state — Downloading: actively transferring bytes.</extracomment>
         <translation>Downloading</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="190"/>
         <source>已暂停</source>
+        <extracomment>Task state — Paused: user-requested pause.</extracomment>
         <translation>Paused</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="191"/>
         <source>已取消</source>
+        <extracomment>Task state — Cancelled: user cancelled the task.</extracomment>
         <translation>Canceled</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="192"/>
         <source>已完成</source>
+        <extracomment>Task state — Completed: all bytes written, merge successful.</extracomment>
         <translation>Completed</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="193"/>
         <source>失败</source>
+        <extracomment>Task state — Failed: terminated with an error.</extracomment>
         <translation>Failed</translation>
     </message>
     <message>

@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE TS>
 <TS version="2.1" language="zh_CN">
+<!--
+  简体中文翻译。
+
+  翻译者说明已迁移到 TRANSLATOR_NOTES.md（与本文件同目录）。
+  本 .ts 文件请勿再加入 <translatorcomment> 顶层块——lrelease 不支持该元素，
+  编译会报 "Unexpected tag <translatorcomment>"。
+-->
 <context>
     <name>DownloadTask</name>
     <message>
@@ -266,73 +273,87 @@
     <message>
         <location filename="../mainwindow.cpp" line="57"/>
         <source>文件名</source>
+        <extracomment>Table column header — File name. Keep under 6 Chinese characters.</extracomment>
         <translation>文件名</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="57"/>
         <source>URL</source>
+        <extracomment>Table column header — URL. Do NOT translate.</extracomment>
         <translation>URL</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="57"/>
         <source>进度</source>
+        <extracomment>Table column header — Progress (percentage bar).</extracomment>
         <translation>进度</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="57"/>
         <source>大小</source>
+        <extracomment>Table column header — File size (bytes).</extracomment>
         <translation>大小</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="57"/>
         <source>速度</source>
+        <extracomment>Table column header — Current transfer speed.</extracomment>
         <translation>速度</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="57"/>
         <source>状态</source>
+        <extracomment>Table column header — Task status (see "等待中"/"下载中"/etc. below).</extracomment>
         <translation>状态</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="57"/>
         <location filename="../mainwindow.cpp" line="148"/>
         <source>操作</source>
+        <extracomment>Table column header — Per-row action buttons (pause / resume / cancel).</extracomment>
         <translation>操作</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="74"/>
         <source>准备就绪</source>
+        <extracomment>Initial status-bar message shown when the app has no tasks.</extracomment>
         <translation>准备就绪</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="142"/>
         <location filename="../mainwindow.cpp" line="188"/>
         <source>等待中</source>
+        <extracomment>Task state — Pending: queued but not yet started.</extracomment>
         <translation>等待中</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="189"/>
         <source>下载中</source>
+        <extracomment>Task state — Downloading: actively transferring bytes.</extracomment>
         <translation>下载中</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="190"/>
         <source>已暂停</source>
+        <extracomment>Task state — Paused: user-requested pause.</extracomment>
         <translation>已暂停</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="191"/>
         <source>已取消</source>
+        <extracomment>Task state — Cancelled: user cancelled the task.</extracomment>
         <translation>已取消</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="192"/>
         <source>已完成</source>
+        <extracomment>Task state — Completed: all bytes written, merge successful.</extracomment>
         <translation>已完成</translation>
     </message>
     <message>
         <location filename="../mainwindow.cpp" line="193"/>
         <source>失败</source>
+        <extracomment>Task state — Failed: terminated with an error.</extracomment>
         <translation>失败</translation>
     </message>
     <message>

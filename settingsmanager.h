@@ -4,7 +4,8 @@
 #include <QObject>
 #include <QSettings>
 #include <QNetworkProxy>
-#include <QCoreApplication> 
+#include <QCoreApplication>
+#include <QString> 
 /**
  * @brief SettingsManager类用于管理应用程序的各种设置。
  * 这是一个单例类，负责加载、保存和提供对代理设置、主题、默认下载路径和默认线程数等配置的访问。
@@ -109,12 +110,41 @@ public:
      */
     bool loadSilentMode() const;
 
+    /**
+     * @brief 获取本地HTTP服务用于认证浏览器插件的bearer token。
+     * @return 当前配置的token；如果未配置则生成并保存一个随机UUID token。
+     */
+    QString bearerToken();
+
+    /**
+     * @brief 设置bearer token。
+     * @param token 要保存的token。
+     */
+    void setBearerToken(const QString& token);
+
+    /**
+     * @brief 执行版本迁移。检查版本键，对老版本schema应用必要的迁移。
+     *
+     * 每次写入时如果版本不匹配，会执行一次升级步骤。当前仅做占位，
+     * 后续可以在此处补充键迁移逻辑。
+     */
+    void migrate();
+
 signals:
     /**
      * @brief 当主题发生改变时发射此信号。
      * @param themeName 新的主题名称。
      */
     void themeChanged(const QString& themeName);
+
+    /**
+     * @brief 当任意持久化设置（代理/线程数/默认路径/监听端口/静默模式等）
+     * 通过 save*() 写入后发射此广播信号。
+     *
+     * 接收方需自行调用 load*() 拉取最新值；本信号不携带具体变更的 key，
+     * 因为 Qt 中跨对象的信号开销极低，全量广播比按 key 细分更不易遗漏。
+     */
+    void settingsChanged();
 
 private:
     /**
@@ -146,6 +176,15 @@ private:
 
     static const QString GROUP_NOTIFICATION;
     static const QString KEY_SILENT_MODE;
+
+    static const QString GROUP_SECURITY;
+    static const QString KEY_BEARER_TOKEN;
+
+    static const QString GROUP_META;
+    static const QString KEY_SCHEMA_VERSION;
+
+    /// 当前schema版本号。
+    static constexpr int CURRENT_SCHEMA_VERSION = 1;
 };
 
 #endif // SETTINGSMANAGER_H

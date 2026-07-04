@@ -3,6 +3,7 @@
 #include <QMessageBox>
 #include <QMenu>
 #include <QDebug>
+#include <QDate>
 #include "logger.h"
 
 HistoryDialog::HistoryDialog(QWidget *parent) :
@@ -11,7 +12,7 @@ HistoryDialog::HistoryDialog(QWidget *parent) :
     m_historyManager(HistoryManager::instance())
 {
     ui->setupUi(this);
-    
+
     // 设置表格属性
     ui->tableWidget->setColumnCount(6);
     ui->tableWidget->setHorizontalHeaderLabels({
@@ -21,7 +22,15 @@ HistoryDialog::HistoryDialog(QWidget *parent) :
     ui->tableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
     ui->tableWidget->setAlternatingRowColors(true);
     ui->tableWidget->setContextMenuPolicy(Qt::CustomContextMenu);
-    
+
+    // 日期过滤器：默认从最早到现在，过滤状态由 m_dateFilterActive 控制
+    ui->dateFromEdit->setDate(QDate::currentDate().addYears(-10));
+    ui->dateToEdit->setDate(QDate::currentDate());
+    ui->dateFromEdit->setMinimumDate(QDate(2000, 1, 1));
+    ui->dateToEdit->setMinimumDate(QDate(2000, 1, 1));
+    ui->dateFromEdit->setMaximumDate(QDate(2100, 12, 31));
+    ui->dateToEdit->setMaximumDate(QDate(2100, 12, 31));
+
     // 连接信号槽
     connect(ui->refreshButton, &QPushButton::clicked, this, &HistoryDialog::onRefreshClicked);
     connect(ui->clearButton, &QPushButton::clicked, this, &HistoryDialog::onClearClicked);
@@ -29,10 +38,14 @@ HistoryDialog::HistoryDialog(QWidget *parent) :
     connect(ui->searchLineEdit, &QLineEdit::textChanged, this, &HistoryDialog::onSearchTextChanged);
     connect(ui->tableWidget, &QTableWidget::itemSelectionChanged, this, &HistoryDialog::onItemSelectionChanged);
     connect(ui->tableWidget, &QTableWidget::customContextMenuRequested, this, &HistoryDialog::showContextMenu);
-    
+    connect(ui->dateFilterButton, &QPushButton::clicked, this, &HistoryDialog::onDateFilterClicked);
+    connect(ui->clearDateFilterButton, &QPushButton::clicked, this, &HistoryDialog::onClearDateFilterClicked);
+    connect(ui->dateFromEdit, &QDateEdit::dateChanged, this, &HistoryDialog::onDateFromChanged);
+    connect(ui->dateToEdit, &QDateEdit::dateChanged, this, &HistoryDialog::onDateToChanged);
+
     // 初始加载历史记录
     loadHistory();
-    
+
     setWindowTitle(tr("下载历史记录"));
     resize(800, 600);
 }
@@ -46,8 +59,7 @@ void HistoryDialog::loadHistory()
 {
     LOGD("开始加载历史记录");
     m_allRecords = m_historyManager.getHistory();
-    m_filteredRecords = m_allRecords;
-    updateTable();
+    applyFilter();
     LOGD(QString("历史记录加载完成，共 %1 条记录").arg(m_allRecords.size()));
 }
 
@@ -147,35 +159,32 @@ void HistoryDialog::onDeleteClicked()
     if (currentRow < 0 || currentRow >= m_filteredRecords.size()) {
         return;
     }
-    
+
     const DownloadRecord &record = m_filteredRecords[currentRow];
-    
-    int ret = QMessageBox::question(this, tr("确认删除"), 
-                                   tr("确定要删除选中的记录吗？\n文件名：%1").arg(record.fileName),
-                                   QMessageBox::Yes | QMessageBox::No,
-                                   QMessageBox::No);
-    
-    if (ret == QMessageBox::Yes) {
-        LOGD(QString("用户确认删除记录：%1").arg(record.fileName));
-        // 找到在全部记录中的索引
-        int originalIndex = -1;
-        for (int i = 0; i < m_allRecords.size(); ++i) {
-            if (m_allRecords[i].url == record.url && 
-                m_allRecords[i].fileName == record.fileName &&
-                m_allRecords[i].startTime == record.startTime) {
-                originalIndex = i;
-                break;
-            }
+
+    if (!confirmDelete(record)) {
+        return;
+    }
+
+    LOGD(QString("用户确认删除记录：%1").arg(record.fileName));
+    // 找到在全部记录中的索引
+    int originalIndex = -1;
+    for (int i = 0; i < m_allRecords.size(); ++i) {
+        if (m_allRecords[i].url == record.url &&
+            m_allRecords[i].fileName == record.fileName &&
+            m_allRecords[i].startTime == record.startTime) {
+            originalIndex = i;
+            break;
         }
-        
-        if (originalIndex >= 0 && m_historyManager.deleteRecord(originalIndex)) {
-            LOGD("记录删除成功");
-            loadHistory();
-            QMessageBox::information(this, tr("成功"), tr("记录已删除"));
-        } else {
-            LOGD("记录删除失败");
-            QMessageBox::warning(this, tr("错误"), tr("删除记录失败"));
-        }
+    }
+
+    if (originalIndex >= 0 && m_historyManager.deleteRecord(originalIndex)) {
+        LOGD("记录删除成功");
+        loadHistory();
+        QMessageBox::information(this, tr("成功"), tr("记录已删除"));
+    } else {
+        LOGD("记录删除失败");
+        QMessageBox::warning(this, tr("错误"), tr("删除记录失败"));
     }
 }
 
@@ -187,21 +196,89 @@ void HistoryDialog::onItemSelectionChanged()
 
 void HistoryDialog::onSearchTextChanged(const QString &text)
 {
-    QString searchText = text.trimmed().toLower();
-    
-    if (searchText.isEmpty()) {
-        m_filteredRecords = m_allRecords;
-    } else {
-        m_filteredRecords.clear();
-        for (const DownloadRecord &record : m_allRecords) {
-            if (record.fileName.toLower().contains(searchText) ||
-                record.url.toLower().contains(searchText)) {
-                m_filteredRecords.append(record);
+    Q_UNUSED(text);
+    applyFilter();
+}
+
+void HistoryDialog::onDateFilterClicked()
+{
+    const QDate from = ui->dateFromEdit->date();
+    const QDate to = ui->dateToEdit->date();
+    if (from > to) {
+        QMessageBox::warning(this, tr("Invalid Date Range"),
+                             tr("'From' date must be earlier than or equal to 'To' date."));
+        return;
+    }
+    m_dateFilterActive = true;
+    applyFilter();
+}
+
+void HistoryDialog::onClearDateFilterClicked()
+{
+    m_dateFilterActive = false;
+    applyFilter();
+}
+
+void HistoryDialog::onDateFromChanged(const QDate &date)
+{
+    Q_UNUSED(date);
+    if (m_dateFilterActive) {
+        applyFilter();
+    }
+}
+
+void HistoryDialog::onDateToChanged(const QDate &date)
+{
+    Q_UNUSED(date);
+    if (m_dateFilterActive) {
+        applyFilter();
+    }
+}
+
+void HistoryDialog::applyFilter()
+{
+    const QString searchText = ui->searchLineEdit->text().trimmed().toLower();
+
+    m_filteredRecords.clear();
+    for (const DownloadRecord &record : m_allRecords) {
+        bool ok = true;
+
+        // 文本过滤
+        if (!searchText.isEmpty()) {
+            const bool matchesText = record.fileName.toLower().contains(searchText) ||
+                                     record.url.toLower().contains(searchText);
+            if (!matchesText) {
+                ok = false;
             }
         }
+
+        // 日期过滤：基于 startTime.date() 落在 [from, to] 区间内
+        if (ok && m_dateFilterActive) {
+            const QDate from = ui->dateFromEdit->date();
+            const QDate to = ui->dateToEdit->date();
+            const QDate dt = record.startTime.date();
+            if (!dt.isValid() || dt < from || dt > to) {
+                ok = false;
+            }
+        }
+
+        if (ok) {
+            m_filteredRecords.append(record);
+        }
     }
-    
+
     updateTable();
+}
+
+bool HistoryDialog::confirmDelete(const DownloadRecord &record)
+{
+    const int ret = QMessageBox::question(
+        this,
+        tr("确认删除"),
+        tr("确定要删除选中的记录吗？\n文件名：%1").arg(record.fileName),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    return ret == QMessageBox::Yes;
 }
 
 void HistoryDialog::showContextMenu(const QPoint &pos)

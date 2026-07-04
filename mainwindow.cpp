@@ -12,7 +12,11 @@
 #include <QTranslator>
 #include <QLocale>
 #include <QTimer> // 用于延迟启动任务
+#include <QProgressDialog>
 #include <utility> // 用于std::as_const
+#include <memory>  // 用于std::unique_ptr
+#include <QFileInfo>
+#include <QDir>
 
 /**
  * @brief 主窗口构造函数
@@ -33,6 +37,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_settingsManager(SettingsManager::instance())
     , m_historyManager(HistoryManager::instance()),
     m_uiUpdateTimer(new QTimer(this))
+    , m_translator(nullptr)
 {
     ui->setupUi(this);
     initUI();
@@ -59,8 +64,15 @@ MainWindow::MainWindow(QWidget *parent)
     // 加载上次保存的主题
     loadStyleSheet(m_settingsManager.loadTheme());
 
+    // 根据系统区域初始化当前语言代码（用于 updateLanguageMenu 判定）
+    QString sysLocale = QLocale::system().name();
+    m_currentLanguage = sysLocale.startsWith("zh") ? "zh_CN" : "en_US";
+
     // 初始化语言菜单
     updateLanguageMenu();
+
+    // 接管翻译器：根据 m_currentLanguage 安装翻译（避免 main 与 mainwindow 双重管理）
+    switchLanguage(m_currentLanguage);
 
     // 设置UI更新定时器
     connect(m_uiUpdateTimer, &QTimer::timeout, this, &MainWindow::onUiUpdateTimerTimeout);
@@ -69,8 +81,21 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    // 清理翻译器：先从应用移除再 delete，避免悬空
+    if (m_translator) {
+        qApp->removeTranslator(m_translator);
+        delete m_translator;
+        m_translator = nullptr;
+    }
     delete ui;
     // m_systemTray的父对象是MainWindow，会自动删除
+}
+
+void MainWindow::requestQuit()
+{
+    // 标记为正在退出，让 closeEvent 接受关闭事件
+    m_quitting = true;
+    QApplication::quit();
 }
 
 void MainWindow::initUI()
@@ -120,38 +145,58 @@ void MainWindow::initUI()
 
 void MainWindow::loadStyleSheet(const QString& themeName)
 {
+    QString styleSheet;
+    bool loaded = false;
+
     // 首先尝试从资源文件加载
     QFile file(QString(":/styles/%1.qss").arg(themeName));
     if (file.open(QFile::ReadOnly | QFile::Text)) {
-        QString styleSheet = file.readAll();
-        qApp->setStyleSheet(styleSheet);
+        styleSheet = file.readAll();
         file.close();
         qDebug() << "Loaded theme from resources:" << themeName;
-        return;
+        loaded = true;
     }
-    
+
     // 如果资源文件加载失败，尝试从应用程序目录加载
-    QString appDir = QCoreApplication::applicationDirPath();
-    QFile absoluteFile(appDir + "/styles/" + themeName + ".qss");
-    if (absoluteFile.open(QFile::ReadOnly | QFile::Text)) {
-        QString styleSheet = absoluteFile.readAll();
-        qApp->setStyleSheet(styleSheet);
-        absoluteFile.close();
-        qDebug() << "Loaded theme from application directory:" << themeName;
-        return;
+    if (!loaded) {
+        QString appDir = QCoreApplication::applicationDirPath();
+        QFile absoluteFile(appDir + "/styles/" + themeName + ".qss");
+        if (absoluteFile.open(QFile::ReadOnly | QFile::Text)) {
+            styleSheet = absoluteFile.readAll();
+            absoluteFile.close();
+            qDebug() << "Loaded theme from application directory:" << themeName;
+            loaded = true;
+        }
     }
-    
+
     // 如果都失败了，尝试从当前工作目录加载
-    QFile currentDirFile("styles/" + themeName + ".qss");
-    if (currentDirFile.open(QFile::ReadOnly | QFile::Text)) {
-        QString styleSheet = currentDirFile.readAll();
-        qApp->setStyleSheet(styleSheet);
-        currentDirFile.close();
-        qDebug() << "Loaded theme from current directory:" << themeName;
+    if (!loaded) {
+        QFile currentDirFile("styles/" + themeName + ".qss");
+        if (currentDirFile.open(QFile::ReadOnly | QFile::Text)) {
+            styleSheet = currentDirFile.readAll();
+            currentDirFile.close();
+            qDebug() << "Loaded theme from current directory:" << themeName;
+            loaded = true;
+        }
+    }
+
+    if (!loaded) {
+        qWarning() << "Failed to load theme:" << themeName;
         return;
     }
-    
-    qWarning() << "Failed to load stylesheet for theme:" << themeName << "tried all paths";
+
+    qApp->setStyleSheet(styleSheet);
+
+    // 把样式表也应用到所有已存在的顶层 widget（含打开着的对话框）。
+    // qApp->setStyleSheet 只会影响后续构造的 widget，已存在的不会重新计算样式，
+    // 需要对每个 widget 先清空再重新设置一次才能生效。
+    const QWidgetList topLevels = QApplication::topLevelWidgets();
+    for (QWidget* w : topLevels) {
+        if (!w || w == this) continue;
+        QString old = w->styleSheet();
+        w->setStyleSheet(QString());
+        w->setStyleSheet(old.isEmpty() ? styleSheet : old);
+    }
 }
 
 QString MainWindow::formatBytes(qint64 bytes) const
@@ -178,6 +223,18 @@ QString MainWindow::formatSpeed(qint64 bytesPerSecond) const
     } else {
         return QString("%1 GB/s").arg(bytesPerSecond / (1024.0 * 1024 * 1024), 0, 'f', 2);
     }
+}
+
+/**
+ * @brief 构造大小列文本。
+ * HEAD 没拿到 Content-Length 时 totalSize=0，单独显示"未知"避免"5430 B/0 B"的违和文案。
+ */
+QString MainWindow::formatSizeCell(qint64 downloaded, qint64 total) const
+{
+    if (total <= 0) {
+        return formatBytes(downloaded) + "/" + tr("未知");
+    }
+    return formatBytes(downloaded) + "/" + formatBytes(total);
 }
 
 void MainWindow::addTaskToTable(DownloadTask* task)
@@ -217,7 +274,7 @@ void MainWindow::addTaskToTable(DownloadTask* task)
 
     // 大小
     LOGD("创建大小标签");
-    QLabel* sizeLabel = new QLabel(formatBytes(task->downloadedSize()) + "/" + formatBytes(task->totalSize()), this);
+    QLabel* sizeLabel = new QLabel(formatSizeCell(task->downloadedSize(), task->totalSize()), this);
     sizeLabel->setAlignment(Qt::AlignCenter);
     sizeLabel->setToolTip(tr("已下载: %1\n总大小: %2").arg(formatBytes(task->downloadedSize())).arg(formatBytes(task->totalSize())));
     ui->tableWidget->setCellWidget(row, 3, sizeLabel);
@@ -276,7 +333,7 @@ void MainWindow::updateTaskInTable(DownloadTask* task)
             // 更新大小
             QLabel* sizeLabel = qobject_cast<QLabel*>(ui->tableWidget->cellWidget(row, 3));
             if (sizeLabel) {
-                QString sizeText = formatBytes(task->downloadedSize()) + "/" + formatBytes(task->totalSize());
+                const QString sizeText = formatSizeCell(task->downloadedSize(), task->totalSize());
                 sizeLabel->setText(sizeText);
                 sizeLabel->setToolTip(tr("已下载: %1\n总大小: %2").arg(formatBytes(task->downloadedSize())).arg(formatBytes(task->totalSize())));
             }
@@ -340,12 +397,54 @@ void MainWindow::showSystemNotification(const QString& title, const QString& mes
 void MainWindow::onNewDownloadRequestFromBrowser(const QString& url, const QString& savePath)
 {
     qDebug() << "Received download request from browser plugin. URL:" << url << "Save Path:" << savePath;
-    // 这里可以弹出一个确认对话框，或者直接创建任务
-    // 暂时直接创建任务
-    QString finalSavePath = savePath.isEmpty() ? m_settingsManager.loadDefaultDownloadPath() + "/" + QUrl(url).fileName() : savePath;
-    DownloadTask* task = m_downloadManager.createTask(url, finalSavePath, m_settingsManager.loadDefaultThreads());
+
+    // URL 协议校验：只接受 http/https，避免浏览器插件把 file:// 等协议丢过来
+    if (url.isEmpty() || !(url.startsWith("http://") || url.startsWith("https://"))) {
+        qWarning() << "Rejected browser download request with invalid URL:" << url;
+        showSystemNotification(tr("新下载任务被拒绝"),
+                               tr("不支持的URL协议，仅支持http/https。"),
+                               QSystemTrayIcon::Warning);
+        return;
+    }
+
+    QUrl urlObj(url);
+    QString fileName = urlObj.fileName();
+    if (fileName.isEmpty()) {
+        // 没有文件名时回退到默认名，避免生成空文件名导致任务无法落地
+        fileName = "download";
+    }
+
+    // 计算最终保存路径：插件传入的 savePath 形态多样，按以下规则归一化
+    //  (a) 空                               -> 默认下载目录 + fileName
+    //  (b) 已存在的目录 / 以分隔符结尾     -> 该目录下拼 fileName
+    //  (c) 裸文件名（无目录分量）           -> 默认下载目录 + 该文件名
+    //  (d) 完整路径（绝对或带目录的相对路径）-> 标准化分隔符后原样使用
+    const QString defaultDir = m_settingsManager.loadDefaultDownloadPath();
+    QString finalSavePath;
+    if (savePath.isEmpty()) {
+        finalSavePath = QDir(defaultDir).absoluteFilePath(fileName);
+    } else {
+        const QFileInfo info(savePath);
+        const bool endsWithSep = savePath.endsWith('/') || savePath.endsWith('\\');
+        if (info.isDir() || endsWithSep) {
+            finalSavePath = QDir(savePath).absoluteFilePath(fileName);
+        } else if (info.fileName() == savePath) {
+            // 关键：QFileInfo::fileName() 等于整段输入，说明完全没有目录分量。
+            // HttpServer 在 savePath 为空时把 filename 兜底发过来，落入此分支。
+            finalSavePath = QDir(defaultDir).absoluteFilePath(savePath);
+        } else {
+            finalSavePath = QDir::cleanPath(savePath);
+        }
+    }
+    LOGD(QString("解析 savePath:%1 -> finalSavePath:%2").arg(savePath, finalSavePath));
+
+    DownloadTask* task = m_downloadManager.createTask(urlObj, finalSavePath, m_settingsManager.loadDefaultThreads());
+    if (!task) {
+        qWarning() << "Failed to create download task from browser request:" << url;
+        return;
+    }
     m_downloadManager.startTask(task);
-    showSystemNotification(tr("新下载任务"), tr("已从浏览器插件接收到下载任务：%1").arg(QUrl(url).fileName()), QSystemTrayIcon::Information);
+    showSystemNotification(tr("新下载任务"), tr("已从浏览器插件接收到下载任务：%1").arg(fileName), QSystemTrayIcon::Information);
 }
 
 /**
@@ -416,11 +515,14 @@ void MainWindow::on_actionNewTask_triggered()
             LOGD("状态栏更新完成");
 
             LOGD("设置 QTimer 延迟启动");
-            QTimer::singleShot(100, this, [this, task]() {
-                LOGD("QTimer 回调执行，开始启动任务");
-                LOGD("调用 m_downloadManager.startTask");
-                m_downloadManager.startTask(task);
-                LOGD("startTask 调用完成");
+            QPointer<DownloadTask> taskPtr(task);
+            QTimer::singleShot(kTaskStartDelayMs, this, [this, taskPtr]() {
+                if (!taskPtr) {
+                    LOGD("任务对象已被销毁，跳过启动");
+                    return;
+                }
+                LOGD(QString("QTimer 回调执行，启动任务: %1").arg(taskPtr->fileName()));
+                m_downloadManager.startTask(taskPtr.data());
             });
             LOGD("QTimer 设置完成");
         } else {
@@ -558,8 +660,6 @@ void MainWindow::on_actionDeleteSelected_triggered()
     }
 }
 
-#include <QProgressDialog>
-
 void MainWindow::on_actionPauseSelected_triggered()
 {
     QList<QTableWidgetItem*> selectedItems = ui->tableWidget->selectedItems();
@@ -592,39 +692,40 @@ void MainWindow::on_actionPauseSelected_triggered()
     }
 
     // 创建进度对话框
-    m_pauseProgress = new QProgressDialog(tr("正在暂停选中的任务..."), 
-                                        tr("取消"), 
-                                        0, 
-                                        tasksToStop.size(), 
+    m_pauseProgress = new QProgressDialog(tr("正在暂停选中的任务..."),
+                                        tr("取消"),
+                                        0,
+                                        tasksToStop.size(),
                                         this);
     m_pauseProgress->setWindowModality(Qt::WindowModal);
     m_pauseProgress->setAttribute(Qt::WA_DeleteOnClose);
     m_pauseProgress->show();
-    
-    // 使用QtConcurrent实现并行暂停
-    auto pauseOperation = [](DownloadTask* task) {
-        if (task) task->pause();
-    };
-    
-    // 创建并配置FutureWatcher
-    QFutureWatcher<void>* watcher = new QFutureWatcher<void>(this);
-    connect(watcher, &QFutureWatcher<void>::progressRangeChanged,
-            m_pauseProgress, &QProgressDialog::setRange);
-    connect(watcher, &QFutureWatcher<void>::progressValueChanged,
-            m_pauseProgress, &QProgressDialog::setValue);
-    connect(watcher, &QFutureWatcher<void>::finished, this, [this, watcher]() {
-        if (m_pauseProgress) m_pauseProgress->accept();
-        watcher->deleteLater();
-    });
-    
-    // 启动并行任务
-    QFuture<void> future = QtConcurrent::map(tasksToStop, pauseOperation);
-    watcher->setFuture(future);
-    
-    // 连接取消信号
-    connect(m_pauseProgress, &QProgressDialog::canceled, this, [watcher]() {
-        watcher->cancel();
-    });
+
+    // 原来的 QtConcurrent::map 会让 lambda 在线程池里与表格行变更并发，
+    // 引发 QTableWidgetItem 写入竞争。这里改成同步循环：UI 暂停期间无新写入，
+    // 通过 QMutexLocker 短暂持有 m_tableMutex 防止重入；进度条仍能反映进度。
+    int done = 0;
+    bool cancelled = false;
+    for (DownloadTask* task : tasksToStop) {
+        if (m_pauseProgress && m_pauseProgress->wasCanceled()) {
+            cancelled = true;
+            break;
+        }
+        {
+            QMutexLocker locker(&m_tableMutex);
+            if (task) task->pause();
+        }
+        ++done;
+        if (m_pauseProgress) m_pauseProgress->setValue(done);
+    }
+    if (m_pauseProgress) {
+        m_pauseProgress->setValue(tasksToStop.size());
+        if (!cancelled) m_pauseProgress->accept();
+    }
+    Q_UNUSED(cancelled);
+
+    // 暂停后刷新按钮可用性（避免选中已暂停的行时 Pause 仍可点的混乱）。
+    refreshSelectionActionStates();
 }
 
 void MainWindow::on_actionResumeSelected_triggered()
@@ -670,23 +771,29 @@ void MainWindow::on_actionAbout_triggered()
 void MainWindow::onTaskAdded(DownloadTask* task)
 {
     LOGD(QString("接收到taskAdded信号 - 任务:%1 URL:%2").arg(task ? task->fileName() : "空").arg(task ? task->url() : "空"));
-    
+
     if (task) {
         LOGD("开始添加任务到表格");
         addTaskToTable(task);
         LOGD("任务已添加到表格");
-        
+
         ui->statusbar->showMessage(tr("新任务已添加：%1").arg(task->fileName()));
         LOGD("状态栏消息已更新");
-        
+
         // 系统通知
         LOGD("显示系统托盘通知");
         showSystemNotification(tr("新任务"), tr("已添加任务：%1").arg(task->fileName()), QSystemTrayIcon::Information);
         LOGD("系统托盘通知已显示");
+
+        // 有新任务时确保 UI 更新定时器处于运行状态
+        if (!m_uiUpdateTimer->isActive()) {
+            m_uiIdleTicks = 0;
+            m_uiUpdateTimer->start(200);
+        }
     } else {
         LOGD("任务指针为空，无法添加");
     }
-    
+
     LOGD("任务添加处理完成");
 }
 
@@ -722,24 +829,35 @@ void MainWindow::onTaskStatusChanged(DownloadTaskStatus status)
 
 void MainWindow::onTaskProgressUpdated(qint64 bytesReceived, qint64 totalBytes, qint64 speed)
 {
-    DownloadTask* task = qobject_cast<DownloadTask*>(sender());
-    if (task) {
-        // 为了避免日志过多，只在特定条件下记录进度日志
-        static QHash<DownloadTask*, qint64> lastLoggedProgress;
+    DownloadTask* raw = qobject_cast<DownloadTask*>(sender());
+    QPointer<DownloadTask> safeTask(raw);
+    if (safeTask) {
+        DownloadTask* task = safeTask.data();
+        // 进度日志节流：每 10% 记录一次（用成员 m_lastLoggedProgress 替代原来的 static QHash，
+        // 避免 static 跨实例共享并防止退出时泄漏）。
         int currentProgress = task->progressPercentage();
-        
-        if (!lastLoggedProgress.contains(task) || 
-            currentProgress - lastLoggedProgress[task] >= 10) { // 每10%记录一次
+
+        QPointer<DownloadTask> key(task);
+        qint64 last = m_lastLoggedProgress.value(key, -1);
+        if (last < 0 || currentProgress - last >= 10) {
             LOGD(QString("任务进度更新 - 文件:%1 进度:%2% 已接收:%3 总大小:%4 速度:%5")
                  .arg(task->fileName())
                  .arg(currentProgress)
                  .arg(bytesReceived)
                  .arg(totalBytes)
                  .arg(speed));
-            lastLoggedProgress[task] = currentProgress;
+            m_lastLoggedProgress.insert(key, currentProgress);
         }
-        
-        m_tasksToUpdate.insert(task);
+
+        // 收到进度回调时确保定时器是运行的（防止上面 stop 后没有重新启动）
+        {
+            QMutexLocker locker(&m_tableMutex);
+            m_tasksToUpdate.insert(safeTask);
+        }
+        if (!m_uiUpdateTimer->isActive()) {
+            m_uiIdleTicks = 0;
+            m_uiUpdateTimer->start(200);
+        }
     }
 }
 
@@ -807,14 +925,78 @@ void MainWindow::onThemeChanged(const QString& themeName)
     loadStyleSheet(themeName);
 }
 
+void MainWindow::on_actionExit_triggered()
+{
+    // File->Exit 必须真的退出程序：标记 m_quitting，让 closeEvent 接受关闭事件。
+    // 默认 Qt Designer 把 actionExit 自动连接到 close()，会先被 closeEvent 拦截成"最小化到托盘"。
+    // 由本槽显式接管：先标记再调用 close()，从而保证退出意图生效。
+    m_quitting = true;
+    close();
+}
+
+void MainWindow::refreshSelectionActionStates()
+{
+    // 根据当前选中的任务状态启用/禁用 暂停/恢复/取消 按钮：
+    // 选中至少一个 Downloading 任务 → Pause 启用；
+    // 选中至少一个 Paused 任务       → Resume 启用；
+    // 选中至少一个可取消（Downloading/Paused/Pending/Failed）的任务 → Cancel 启用。
+    if (!ui || !ui->tableWidget) return;
+    const QList<QTableWidgetItem*> selected = ui->tableWidget->selectedItems();
+    bool canPause = false, canResume = false, canCancel = false;
+    QSet<int> seen;
+    for (QTableWidgetItem* it : selected) {
+        int row = it->row();
+        if (seen.contains(row)) continue;
+        seen.insert(row);
+        QTableWidgetItem* col0 = ui->tableWidget->item(row, 0);
+        if (!col0) continue;
+        DownloadTask* task = col0->data(Qt::UserRole).value<DownloadTask*>();
+        if (!task) continue;
+        switch (task->status()) {
+            case DownloadTaskStatus::Downloading: canPause = true; canCancel = true; break;
+            case DownloadTaskStatus::Paused:      canResume = true; canCancel = true; break;
+            case DownloadTaskStatus::Pending:     canCancel = true; break;
+            case DownloadTaskStatus::Failed:      canCancel = true; break;
+            default: break;
+        }
+    }
+    if (ui->actionPauseSelected)   ui->actionPauseSelected->setEnabled(canPause);
+    if (ui->actionResumeSelected)  ui->actionResumeSelected->setEnabled(canResume);
+    if (ui->actionCancelSelected)  ui->actionCancelSelected->setEnabled(canCancel);
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (m_systemTray && m_systemTray->isVisible()) {
+    // 如果是程序主动退出（托盘退出/File->Exit），直接接受关闭事件
+    if (m_quitting) {
+        event->accept();
+        return;
+    }
+
+    // 只有当存在正在下载/暂停的任务时，才允许最小化到托盘；
+    // 否则按"用户关闭窗口"直接退出，避免历史遗留"按 X 永远不退出"的体验。
+    bool hasActive = false;
+    if (ui && ui->tableWidget) {
+        QMutexLocker locker(&m_tableMutex);
+        for (int row = 0; row < ui->tableWidget->rowCount(); ++row) {
+            QTableWidgetItem* col0 = ui->tableWidget->item(row, 0);
+            if (!col0) continue;
+            DownloadTask* task = col0->data(Qt::UserRole).value<DownloadTask*>();
+            if (task) {
+                const auto st = task->status();
+                if (st == DownloadTaskStatus::Downloading || st == DownloadTaskStatus::Paused) {
+                    hasActive = true; break;
+                }
+            }
+        }
+    }
+
+    if (hasActive && m_systemTray && m_systemTray->isVisible()) {
         hide(); // 隐藏主窗口
         showSystemNotification(tr("下载器正在后台运行"), tr("点击图标可恢复窗口。"), QSystemTrayIcon::Information);
         event->ignore(); // 忽略关闭事件，阻止程序退出
     } else {
-        // 如果没有托盘图标或者用户选择退出，则正常关闭
+        // 没有活跃任务或没有托盘，按 X 就直接退出
         event->accept();
     }
 }
@@ -864,53 +1046,68 @@ void MainWindow::on_actionEnglish_triggered()
 
 void MainWindow::switchLanguage(const QString& language)
 {
-    static QTranslator translator;
-    
-    // 移除旧的翻译
-    qApp->removeTranslator(&translator);
-    
-    // 加载新的翻译文件
+    // 尝试加载新翻译，失败时不要破坏当前已安装的翻译器
+    // QTranslator 禁用了拷贝/移动赋值，所以用 unique_ptr 管理新翻译器，
+    // 加载成功后转移所有权到 m_translator 指针。
+    std::unique_ptr<QTranslator> newTranslator(new QTranslator());
+    bool loaded = false;
+    QString loadedFrom;
+
+    auto tryLoad = [&newTranslator, &loaded, &loadedFrom](const QString& path) -> bool {
+        if (newTranslator->load(path)) {
+            loaded = true;
+            loadedFrom = path;
+            return true;
+        }
+        return false;
+    };
+
     if (language == "zh_CN") {
-        // 首先尝试从资源文件加载
-        if (translator.load(":/translations/zh_CN.qm")) {
-            qApp->installTranslator(&translator);
-            qDebug() << "Switched to Chinese (from resource)";
-        } else {
-            // 如果资源文件加载失败，尝试从文件系统加载
-            if (translator.load("translations/zh_CN.qm")) {
-                qApp->installTranslator(&translator);
-                qDebug() << "Switched to Chinese (from file system)";
-            } else {
-                qWarning() << "Failed to load Chinese translation";
-            }
+        loaded = tryLoad(":/translations/zh_CN.qm");
+        if (!loaded) {
+            QString appDir = QCoreApplication::applicationDirPath();
+            loaded = tryLoad(appDir + "/translations/zh_CN.qm");
+        }
+        if (!loaded) {
+            loaded = tryLoad("translations/zh_CN.qm");
         }
     } else if (language == "en_US") {
-        // 首先尝试从资源文件加载
-        if (translator.load(":/translations/en_US.qm")) {
-            qApp->installTranslator(&translator);
-            qDebug() << "Switched to English (from resource)";
-        } else {
-            // 如果资源文件加载失败，尝试从文件系统加载
-            if (translator.load("translations/en_US.qm")) {
-                qApp->installTranslator(&translator);
-                qDebug() << "Switched to English (from file system)";
-            } else {
-                qWarning() << "Failed to load English translation";
-            }
+        loaded = tryLoad(":/translations/en_US.qm");
+        if (!loaded) {
+            QString appDir = QCoreApplication::applicationDirPath();
+            loaded = tryLoad(appDir + "/translations/en_US.qm");
+        }
+        if (!loaded) {
+            loaded = tryLoad("translations/en_US.qm");
         }
     }
-    
+
+    if (loaded) {
+        // 加载成功才替换：先移除旧翻译器，删除旧对象，再安装新翻译器
+        if (m_translator) {
+            qApp->removeTranslator(m_translator);
+            delete m_translator;
+            m_translator = nullptr;
+        }
+        m_translator = newTranslator.release();
+        qApp->installTranslator(m_translator);
+        m_currentLanguage = language;
+        qDebug() << "Switched to" << language << "from" << loadedFrom;
+    } else {
+        qWarning() << "Failed to load translation for" << language;
+    }
+
     // 重新翻译UI
     ui->retranslateUi(this);
-    
+
     // 重新设置表头标签
     ui->tableWidget->setHorizontalHeaderLabels({
         tr("文件名"), tr("URL"), tr("进度"), tr("大小"), tr("速度"), tr("状态"), tr("操作")
     });
-    
+
     // 更新语言菜单状态
     updateLanguageMenu();
-    
+
     // 显示切换成功消息
     if (language == "zh_CN") {
         ui->statusbar->showMessage(tr("已切换到中文界面"));
@@ -921,29 +1118,17 @@ void MainWindow::switchLanguage(const QString& language)
 
 /**
  * @brief 更新语言菜单状态
- * 
- * 根据当前界面语言设置语言菜单项的选中状态：
- * 1. 通过检查窗口标题判断当前语言(中文或英文)
- * 2. 设置对应语言菜单项的checked状态
- * 3. 确保每次语言切换后菜单状态同步更新
+ *
+ * 根据当前界面语言设置语言菜单项的选中状态。
+ * 统一使用 m_currentLanguage 成员变量，不再依赖窗口标题字符串匹配。
  */
 void MainWindow::updateLanguageMenu()
 {
-    // 根据当前语言更新菜单项的选中状态
-    QString currentLanguage = "zh_CN"; // 默认中文
-    
-    // 检查当前界面语言
-    // 如果窗口标题是英文，说明当前是英文模式
-    if (windowTitle().contains("Multi-thread")) {
-        currentLanguage = "en_US";
-    }
-    
-    // 直接通过ui指针访问动作，因为它们在ui_mainwindow.h中已声明
     if (ui->actionChinese) {
-        ui->actionChinese->setChecked(currentLanguage == "zh_CN");
+        ui->actionChinese->setChecked(m_currentLanguage == "zh_CN");
     }
     if (ui->actionEnglish) {
-        ui->actionEnglish->setChecked(currentLanguage == "en_US");
+        ui->actionEnglish->setChecked(m_currentLanguage == "en_US");
     }
 }
 
@@ -960,32 +1145,41 @@ void MainWindow::updateLanguageMenu()
  */
 void MainWindow::onUiUpdateTimerTimeout()
 {
-    if (m_tasksToUpdate.isEmpty()) {
-        return;
+    // 取出本轮需要刷新的任务，复制出来以避免与 producer（progressUpdated 等信号）的写入并发。
+    // 用 QPointer 是因为 task 可能在 set 取出到 update 之间被 deleteLater（task 完成/取消路径）。
+    QSet<QPointer<DownloadTask>> snapshot;
+    {
+        QMutexLocker locker(&m_tableMutex);
+        if (m_tasksToUpdate.isEmpty()) {
+            if (++m_uiIdleTicks >= 3 && m_uiUpdateTimer->isActive()) {
+                m_uiUpdateTimer->stop();
+                m_uiIdleTicks = 3;
+            }
+            return;
+        }
+        snapshot = m_tasksToUpdate;
+        m_tasksToUpdate.clear();
     }
+    m_uiIdleTicks = 0;
 
-    // 批量更新
-    for (DownloadTask* task : std::as_const(m_tasksToUpdate)) {
-        if (task) {
-            updateTaskInTable(task);
+    // 批量更新；任务可能在 update 期间被销毁，updateTaskInTable 自身需有 QPointer 守卫。
+    DownloadTask* lastActiveTask = nullptr;
+    for (const QPointer<DownloadTask>& p : std::as_const(snapshot)) {
+        DownloadTask* task = p.data();
+        if (!task) continue; // 已 deleteLater，跳过
+        updateTaskInTable(task);
+        if (task->status() == DownloadTaskStatus::Downloading) {
+            lastActiveTask = task;
         }
     }
 
     // 更新状态栏（只显示最后一个活动任务的信息）
-    DownloadTask* lastActiveTask = nullptr;
-    for (DownloadTask* task : std::as_const(m_tasksToUpdate)) {
-        if (task && task->status() == DownloadTaskStatus::Downloading) {
-            lastActiveTask = task;
-        }
-    }
     if (lastActiveTask) {
         ui->statusbar->showMessage(tr("下载中：%1 - %2% (%3/s)")
                                    .arg(lastActiveTask->fileName())
                                    .arg(lastActiveTask->progressPercentage())
                                    .arg(formatSpeed(lastActiveTask->downloadSpeed())));
     }
-
-    m_tasksToUpdate.clear();
 }
 
 /**
@@ -1070,16 +1264,27 @@ void MainWindow::setupHeaderBehavior()
 {
     connect(ui->tableWidget->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int logicalIndex, int oldSize, int newSize) {
         Q_UNUSED(oldSize)
-        
+
         const int minWidths[] = {120, 200, 120, 80, 80, 80, 80};
         const int maxWidths[] = {300, 400, 150, 120, 120, 100, 100};
-        
-        if (logicalIndex < 7) {
-            if (newSize < minWidths[logicalIndex]) {
-                ui->tableWidget->setColumnWidth(logicalIndex, minWidths[logicalIndex]);
-            } else if (newSize > maxWidths[logicalIndex]) {
-                ui->tableWidget->setColumnWidth(logicalIndex, maxWidths[logicalIndex]);
+
+        if (logicalIndex < 0 || logicalIndex >= 7) {
+            return;
+        }
+
+        // URL 列（索引1）特殊处理：固定一个最小宽度，不让用户拖到 0
+        if (logicalIndex == 1) {
+            if (newSize < minWidths[1]) {
+                ui->tableWidget->setColumnWidth(1, minWidths[1]);
             }
+            // URL 列是 Stretch 模式，不强制上限
+            return;
+        }
+
+        if (newSize < minWidths[logicalIndex]) {
+            ui->tableWidget->setColumnWidth(logicalIndex, minWidths[logicalIndex]);
+        } else if (newSize > maxWidths[logicalIndex]) {
+            ui->tableWidget->setColumnWidth(logicalIndex, maxWidths[logicalIndex]);
         }
     });
 }
@@ -1094,30 +1299,35 @@ void MainWindow::setupResponsiveTableColumns()
 /**
  * @brief 处理定时下载任务触发
  * @param task 触发的定时任务
- * 
- * 当定时任务到达预定时间时，自动创建并开始下载任务
+ *
+ * 当定时任务到达预定时间时，自动创建并开始下载任务。
+ * 注意：schedulemanager.cpp 在遍历 m_tasks 期间触发了此槽，
+ * 这里先按值拷贝一份本地副本，避免直接引用 m_tasks 中的元素。
  */
 void MainWindow::onScheduledTaskTriggered(const ScheduledTask& task)
 {
-    LOGD(QString("定时任务触发 - 文件:%1 URL:%2").arg(task.fileName).arg(task.url));
-    
+    // 先做值拷贝，避免 schedule 内部迭代与触发并发（schedulemanager.cpp 在迭代中触发此槽）
+    const ScheduledTask taskCopy = task;
+
+    LOGD(QString("定时任务触发 - 文件:%1 URL:%2").arg(taskCopy.fileName).arg(taskCopy.url));
+
     // 创建下载任务
-    DownloadTask* downloadTask = m_downloadManager.createTask(QUrl(task.url), task.savePath, 4);
+    DownloadTask* downloadTask = m_downloadManager.createTask(QUrl(taskCopy.url), taskCopy.savePath, 4);
     if (downloadTask) {
         // 开始下载
         m_downloadManager.startTask(downloadTask);
-        
+
         // 显示系统通知
-        showSystemNotification(tr("定时下载开始"), 
-                              tr("文件 '%1' 定时下载已开始").arg(task.fileName), 
+        showSystemNotification(tr("定时下载开始"),
+                              tr("文件 '%1' 定时下载已开始").arg(taskCopy.fileName),
                               QSystemTrayIcon::Information);
-        
-        LOGD(QString("定时下载任务已开始 - 文件:%1").arg(task.fileName));
+
+        LOGD(QString("定时下载任务已开始 - 文件:%1").arg(taskCopy.fileName));
     } else {
-        LOGD(QString("定时下载任务创建失败 - 文件:%1 URL:%2").arg(task.fileName).arg(task.url));
-        
-        showSystemNotification(tr("定时下载失败"), 
-                              tr("文件 '%1' 定时下载失败").arg(task.fileName), 
+        LOGD(QString("定时下载任务创建失败 - 文件:%1 URL:%2").arg(taskCopy.fileName).arg(taskCopy.url));
+
+        showSystemNotification(tr("定时下载失败"),
+                              tr("文件 '%1' 定时下载失败").arg(taskCopy.fileName),
                               QSystemTrayIcon::Warning);
     }
 }

@@ -1,5 +1,7 @@
 #include "systemtray.h"
 #include "logger.h"
+#include <QPointer>
+#include <QTimer>
 
 /**
  * @brief 系统托盘构造函数
@@ -55,21 +57,24 @@ SystemTray::SystemTray(QMainWindow* mainWindow, QObject *parent)
     m_trayIcon->setIcon(icon);
     m_trayIcon->setToolTip(tr("Downloader"));
 
-    // 创建菜单
-    m_trayMenu = new QMenu();
+    // 创建菜单（parent 设为 mainWindow，避免 leak 并跟随主窗口生命周期一起释放）
+    // QMenu 的 parent 必须是 QWidget，因此用 m_mainWindow。
+    m_trayMenu = new QMenu(m_mainWindow);
     createActions();
 
     // 连接信号和槽
     connect(m_trayIcon, &QSystemTrayIcon::activated, this, &SystemTray::onIconActivated);
-    
+
     // 设置托盘图标菜单
     m_trayIcon->setContextMenu(m_trayMenu);
 }
 
 SystemTray::~SystemTray()
 {
-    // m_trayIcon, m_trayMenu, m_showAction, m_quitAction 都是 SystemTray 的子对象，
-    // 会在 SystemTray 析构时自动删除，无需手动 delete
+    // m_trayIcon、m_showAction、m_quitAction 都是 SystemTray 的子对象，
+    // 会在 SystemTray 析构时自动删除。
+    // m_trayMenu 现在 parent 是 m_mainWindow，会跟随主窗口一起释放，无需手动 delete。
+    m_trayMenu = nullptr;
 }
 
 /**
@@ -93,24 +98,15 @@ SystemTray::~SystemTray()
  */
 void SystemTray::createActions()
 {
-    LOGD("开始创建动作...");
-    
-    LOGD("开始创建显示动作...");
-    m_showAction = new QAction("显示主界面", this);
-    LOGD("显示动作创建完成");
-    
-    LOGD("开始创建退出动作...");
-    m_quitAction = new QAction("退出", this);
-    LOGD("退出动作创建完成");
-    
-    LOGD("开始连接动作信号...");
+    // 创建菜单项
+    m_showAction = new QAction(tr("显示主界面"), this);
+    m_quitAction = new QAction(tr("退出"), this);
+
+    // 连接信号槽
     connect(m_showAction, &QAction::triggered, this, &SystemTray::onShowMainWindow);
     connect(m_quitAction, &QAction::triggered, this, &SystemTray::onQuitApplication);
-    LOGD("动作信号连接完成");
-    
-    LOGD("动作创建完成");
-    
-    // 将动作添加到菜单
+
+    // 组装菜单
     m_trayMenu->addAction(m_showAction);
     m_trayMenu->addSeparator();
     m_trayMenu->addAction(m_quitAction);
@@ -163,20 +159,36 @@ void SystemTray::onIconActivated(QSystemTrayIcon::ActivationReason reason)
  */
 void SystemTray::onShowMainWindow()
 {
-    if (m_mainWindow) {
-        m_mainWindow->showNormal();
-        m_mainWindow->raise();
-        m_mainWindow->activateWindow();
+    if (!m_mainWindow) {
+        return;
     }
+    // 在某些平台（尤其 Windows + 已隐藏窗口），连续调用 showNormal()/raise()/activateWindow()
+    // 会与系统事件循环产生竞争导致窗口不显示或闪烁。改为延迟到事件循环下一次迭代执行，
+    // 让窗口的当前状态先稳定下来再显示。
+    QTimer::singleShot(0, this, [mainWindow = QPointer<QMainWindow>(m_mainWindow)]() {
+        if (!mainWindow) return;
+        if (mainWindow->isMinimized()) {
+            mainWindow->showNormal();
+        } else {
+            mainWindow->show();
+        }
+        mainWindow->raise();
+        mainWindow->activateWindow();
+    });
 }
 
 /**
  * @brief 退出应用程序
- * 
- * 响应用户退出操作，终止整个应用程序
- * 调用QApplication::quit()触发应用程序正常退出流程
+ *
+ * 响应用户退出操作，终止整个应用程序。
+ * 通过调用主窗口的 requestQuit() 设置退出标志，
+ * 再触发 QApplication::quit() 退出事件循环。
  */
 void SystemTray::onQuitApplication()
 {
-    QApplication::quit();
+    if (m_mainWindow) {
+        QMetaObject::invokeMethod(m_mainWindow, "requestQuit");
+    } else {
+        QApplication::quit();
+    }
 }

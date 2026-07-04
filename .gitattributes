@@ -1,2 +1,67 @@
-# Auto detect text files and perform LF normalization
+# Auto detect text files and normalize line endings on commit.
+# This project is Qt6 + MinGW on Windows; source/binary conventions are
+# tailored to that workflow but stay safe across OSes.
+
+# Default: let git auto-detect; CRLF for text in checkout on Windows.
 * text=auto
+
+# C/C++/Qt source: CRLF (Qt/Windows convention).
+*.c        text eol=crlf
+*.cpp      text eol=crlf
+*.cc       text eol=crlf
+*.cxx      text eol=crlf
+*.h        text eol=crlf
+*.hh       text eol=crlf
+*.hpp      text eol=crlf
+*.hxx      text eol=crlf
+*.inc      text eol=crlf
+
+# Qt MOC/UIC/QRC generated sources: still text, CRLF to match.
+*.qrc      text eol=crlf
+*.ui       text eol=crlf
+*.qss      text eol=crlf
+*.ts       text eol=crlf
+
+# CMake / shell scripts: LF (POSIX convention).
+CMakeLists.txt           text eol=lf
+*.cmake                  text eol=lf
+*.cmake.in               text eol=lf
+*.sh                     text eol=lf
+*.bat                    text eol=crlf
+*.ps1                    text eol=crlf
+
+# Documentation / data: LF.
+*.md         text eol=lf
+*.txt        text eol=lf
+*.json       text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+*.toml       text eol=lf
+*.ini        text eol=lf
+*.csv        text eol=lf
+*.html       text eol=lf
+*.css        text eol=lf
+*.js         text eol=lf
+*.qrc        text eol=crlf
+LICENSE      text eol=lf
+
+# Binary: do not touch line endings.
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.ico        binary
+*.qm         binary
+*.gz         binary
+*.zip        binary
+*.7z         binary
+*.exe        binary
+*.dll        binary
+*.so         binary
+*.dylib      binary
+*.o          binary
+*.obj        binary
+*.a          binary
+*.lib        binary
+*.crx        binary
+*.pem        binary

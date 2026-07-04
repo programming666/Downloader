@@ -8,9 +8,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Network Gui Concurrent)
-# 检查Qt6是否支持HttpServer模块
-find_package(Qt6 COMPONENTS HttpServer REQUIRED)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Network Gui Concurrent LinguistTools)
+# 检查Qt6是否支持HttpServer模块（可选；缺失时回退到 QTcpServer 手写 HTTP 协议）
+find_package(Qt6 6.5 QUIET COMPONENTS HttpServer)
 if(TARGET Qt6::HttpServer)
     message(STATUS "找到Qt6 HttpServer模块")
     # 定义宏以启用QHttpServer
@@ -63,6 +63,8 @@ qt_add_executable(Downloader
     historydialog.ui
     icon.qrc
 )
+# 自动 lrelease: 把 translations/*.ts 编译成 /i18n/*.qm 资源（替代手写 qrc 引用）。
+qt_add_translations(Downloader TS_FILES translations/zh_CN.ts translations/en_US.ts)
 target_link_libraries(Downloader
     PRIVATE
         Qt6::Core
@@ -71,6 +73,7 @@ target_link_libraries(Downloader
         Qt6::Gui
         Qt6::Concurrent
 )
+target_compile_features(Downloader PRIVATE cxx_std_17)
 # 如果HttpServer模块可用，则链接它
 if(TARGET Qt6::HttpServer)
     target_link_libraries(Downloader PRIVATE Qt6::HttpServer)

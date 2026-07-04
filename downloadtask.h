@@ -12,6 +12,9 @@
 #include <QTimer>
 #include <QMutex>
 #include <QEventLoop>
+#include <QThreadPool>
+#include <QAtomicInt>
+#include <QNetworkProxy>
 #include "httpworker.h"
 //#include "historymanager.h" // 包含历史管理器头文件
 
@@ -66,6 +69,22 @@ public:
      * @param deleteTempFiles 是否删除所有临时文件。
      */
     void cancel(bool deleteTempFiles = true);
+
+    /**
+     * @brief 应用新的代理设置。
+     *
+     * 由 DownloadManager::onSettingsChanged() 在 SettingsManager 发出
+     * settingsChanged 广播时调用。会：
+     *   1. 更新 m_proxy 供后续新建的 HEAD/Worker QNAM 使用；
+     *   2. 立即对 m_headManager（如果存在）调用 setProxy；
+     *   3. 对所有活动 worker 的 QNAM 调用 setProxy。
+     *
+     * 由于 DownloadTask 与 HttpWorker 的 QNAM 都活在主线程，
+     * 不需要 QMetaObject::invokeMethod 跨线程派发。
+     *
+     * @param proxy 新的 QNetworkProxy（type 字段需已正确设置）。
+     */
+    void applyProxy(const QNetworkProxy& proxy);
 
     /**
      * @brief 获取当前任务的状态。
@@ -171,11 +190,6 @@ private slots:
     void onWorkerError(const QString& errorString);
 
     /**
-     * @brief 处理HttpWorker下载完成的信号。
-     */
-    void onWorkerDownloadFinished();
-
-    /**
      * @brief 定时器槽函数，用于计算下载速度和更新UI。
      */
     void onSpeedCalculationTimerTimeout();
@@ -196,6 +210,20 @@ private:
      * @brief 分割文件并创建HttpWorker。
      */
     void createHttpWorkers();
+
+    /**
+     * @brief 获取系统临时目录路径。
+     * @return 临时目录路径。
+     */
+    QString getTempDirectory() const;
+
+    /**
+     * @brief 将文件从临时目录移动到最终目标位置。
+     * @param tempFilePath 临时文件路径。
+     * @param finalFilePath 最终文件路径。
+     * @return 移动成功返回true，否则返回false。
+     */
+    bool moveFileToFinalLocation(const QString& tempFilePath, const QString& finalFilePath);
 
     /**
      * @brief 检查所有HttpWorker是否都已完成。
@@ -276,11 +304,15 @@ private:
     QUrl m_url;                         ///< 下载文件的URL。
     QString m_filePath;                 ///< 文件保存的本地路径。
     QString m_fileName;                 ///< 文件名。
-    int m_threadCount;                  ///< 下载线程数。
+    QString m_tempDirectory;            ///< 临时文件存储目录。
+    int m_threadCount;                  ///< 下载线程数（用户请求，可能被 HEAD 阶段回退）。
+    int m_createdWorkerCount = 0;       ///< 实际创建的 HttpWorker 数（被 merge/deleteTempFiles 当作 part 数快照，不会再变）。
+    QThreadPool* m_threadPool;          ///< 线程池指针（来自DownloadManager，不使用globalInstance）。
     DownloadTaskStatus m_status;        ///< 当前任务状态。
 
     qint64 m_totalSize;                 ///< 文件总大小。
     qint64 m_downloadedSize;            ///< 已下载大小。
+    qint64 m_bytesReceivedByWorkers = 0;///< worker 累计已写入磁盘字节（由 200ms 定时器刷新；HEAD 拿不到 Content-Length 时也能量化"已下载多少"）。
     qint64 m_lastDownloadedSize;        ///< 上次计算速度时的已下载大小。
     qint64 m_downloadSpeed;             ///< 当前下载速度。
     QDateTime m_startTime;              ///< 任务开始时间。
@@ -295,7 +327,9 @@ private:
     mutable QMutex m_mutex;                     ///< 用于保护worker列表等数据的互斥锁
     mutable QMutex m_statusMutex;               ///< 专门保护状态变量的互斥锁
     mutable QMutex m_historyMutex;              ///< 专门保护历史记录操作的互斥锁
-    bool m_headRequestTimedOut{false};  ///< 标记HEAD请求是否已超时。
+    QAtomicInt m_headRequestTimedOut{0};  ///< 标记HEAD请求是否已超时（原子，多超时回调并发安全）。
+    bool m_alreadyFinished{false};      ///< 标记finished信号是否已发射，避免重复发射。
+    QNetworkProxy m_proxy;              ///< 当前代理设置；HEAD/Worker 的 QNAM 通过 applyProxy 同步此值。
 };
 
 #endif // DOWNLOADTASK_H

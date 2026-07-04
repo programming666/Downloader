@@ -5,6 +5,7 @@
 #include <QTableWidgetItem>
 #include <QClipboard>
 #include <QApplication>
+#include <QDate>
 #include "historymanager.h"
 
 namespace Ui {
@@ -25,16 +26,23 @@ private slots:
     void onDeleteClicked();
     void onItemSelectionChanged();
     void onSearchTextChanged(const QString &text);
+    void onDateFilterClicked();
+    void onClearDateFilterClicked();
+    void onDateFromChanged(const QDate &date);
+    void onDateToChanged(const QDate &date);
 
 private:
     void loadHistory();
     void updateTable();
     void showContextMenu(const QPoint &pos);
-    
+    void applyFilter();
+    bool confirmDelete(const DownloadRecord &record);
+
     Ui::HistoryDialog *ui;
     HistoryManager &m_historyManager;
     QList<DownloadRecord> m_allRecords;
     QList<DownloadRecord> m_filteredRecords;
+    bool m_dateFilterActive = false;
 };
 
 #endif // HISTORYDIALOG_H

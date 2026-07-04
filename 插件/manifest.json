@@ -4,15 +4,13 @@
   "version": "1.0",
   "description": "拦截浏览器下载并发送到Downloader应用程序",
   "icons": {
-    "16": "icon.png",
-    "48": "icon.png",
     "128": "icon.png"
   },
   "permissions": [
     "downloads",
     "storage",
     "notifications",
-    "activeTab"
+    "alarms"
   ],
   "background": {
     "service_worker": "background.js"
@@ -24,5 +22,14 @@
   },
   "host_permissions": [
     "<all_urls>"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://localhost:* http://127.0.0.1:*"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icon.png"],
+      "matches": ["<all_urls>"]
+    }
   ]
 }

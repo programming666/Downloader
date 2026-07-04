@@ -1,6 +1,16 @@
 #include "downloadmanager.h"
 #include "logger.h"
+#include "settingsmanager.h"
 #include <QDebug>
+#include <QPointer>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QMetaObject>
+
+namespace {
+    // 保护 m_tasks 的并发访问（task 创建/移除可能跨线程触发）
+    QMutex g_tasksMutex;
+}
 
 /**
  * @brief 下载管理器构造函数
@@ -21,22 +31,47 @@ DownloadManager::DownloadManager(QObject *parent)
     // 根据CPU核心数设置最大线程数，留一个核心给UI和其他任务
     int maxThreads = QThread::idealThreadCount() > 1 ? QThread::idealThreadCount() - 1 : 1;
     LOGD(QString("检测到CPU核心数:%1 设置最大线程数:%2").arg(QThread::idealThreadCount()).arg(maxThreads));
-    
+
     m_threadPool->setMaxThreadCount(maxThreads);
     LOGD(QString("线程池最大线程数设置完成:%1").arg(m_threadPool->maxThreadCount()));
-    
+
+    // 监听设置变更广播：当代理/线程数/默认路径等被 SettingsDialog 写入时，
+    // 自动把新代理推送给所有活动 DownloadTask。线程数变更只对后续新建任务
+    // 生效——in-flight 任务的 worker 数量不能中途改变。
+    connect(&SettingsManager::instance(), &SettingsManager::settingsChanged,
+            this, &DownloadManager::onSettingsChanged);
+
     LOGD("DownloadManager初始化完成");
 }
 
 DownloadManager::~DownloadManager()
 {
     LOGD(QString("开始销毁DownloadManager，当前任务数:%1").arg(m_tasks.size()));
-    
-    // 等待所有任务完成
-    LOGD("等待线程池中的任务完成...");
-    m_threadPool->waitForDone();
-    LOGD("线程池中的任务已全部完成");
-    
+
+    // 等待所有任务完成（带超时，避免永久阻塞）
+    LOGD("等待线程池中的任务完成（超时5秒）...");
+    if (!m_threadPool->waitForDone(5000)) {
+        LOGD("线程池等待超时，强制继续清理");
+    } else {
+        LOGD("线程池中的任务已全部完成");
+    }
+
+    // 用 QPointer 复制当前任务列表并加锁访问，避免其他线程并发修改 m_tasks 时 UAF；
+    // 删除前显式 disconnect + blockSignals 防止回调触发到正在销毁的对象上。
+    QList<QPointer<DownloadTask>> snapshot;
+    {
+        QMutexLocker locker(&g_tasksMutex);
+        for (DownloadTask* task : m_tasks) {
+            snapshot.append(QPointer<DownloadTask>(task));
+        }
+    }
+    for (const QPointer<DownloadTask>& p : snapshot) {
+        DownloadTask* task = p.data();
+        if (!task) continue; // 已被其他路径 deleteLater 掉
+        task->disconnect();   // 断开所有信号
+        task->blockSignals(true);
+    }
+
     // QThreadPool的父对象是DownloadManager，会自动删除
     // m_tasks中的DownloadTask对象需要手动管理
     LOGD("开始删除所有任务对象...");
@@ -73,10 +108,13 @@ DownloadTask* DownloadManager::createTask(const QUrl& url, const QString& savePa
     
     m_tasks.append(task);
     LOGD(QString("任务已添加到任务列表，总任务数:%1").arg(m_tasks.size()));
-    
+
     LOGD("开始连接任务信号...");
-    connect(task, &DownloadTask::finished, this, &DownloadManager::onTaskFinished);
-    connect(task, &DownloadTask::error, this, &DownloadManager::onTaskError);
+    // 使用 QueuedConnection 强制跨线程安全派发；
+    // DownloadTask 的 finished/error 可能在子线程触发，但 DownloadManager 可能在主线程
+    // （取决于线程亲和性），用 QueuedConnection 可以避免跨线程直接派发到正在析构的对象。
+    connect(task, &DownloadTask::finished, this, &DownloadManager::onTaskFinished, Qt::QueuedConnection);
+    connect(task, &DownloadTask::error, this, &DownloadManager::onTaskError, Qt::QueuedConnection);
     LOGD("任务信号连接完成");
     
     LOGD("准备发射taskAdded信号...");
@@ -144,52 +182,92 @@ QThreadPool* DownloadManager::threadPool() const
 void DownloadManager::onTaskFinished()
 {
     LOGD("接收到任务完成信号");
-    
-    DownloadTask* task = qobject_cast<DownloadTask*>(sender());
-    if (task) {
+
+    // sender() 可能在 task deleteLater 之后返回悬空指针；用 QPointer 保护
+    DownloadTask* raw = qobject_cast<DownloadTask*>(sender());
+    QPointer<DownloadTask> safeTask(raw);
+    if (safeTask) {
+        DownloadTask* task = safeTask.data();
         LOGD(QString("任务有效，文件名:%1 状态:%2").arg(task->fileName()).arg(static_cast<int>(task->status())));
-        
+
         LOGD("发射taskFinished信号...");
         emit taskFinished(task);
         LOGD("taskFinished信号已发射");
-        
+
         LOGD("从任务列表中移除任务...");
-        m_tasks.removeOne(task);
+        {
+            QMutexLocker locker(&g_tasksMutex);
+            m_tasks.removeOne(task);
+        }
         LOGD(QString("任务已从列表中移除，剩余任务数:%1").arg(m_tasks.size()));
-        
+
         LOGD("标记任务为延迟删除...");
         task->deleteLater(); // 任务完成后安全删除
         LOGD("任务已标记为延迟删除");
     } else {
-        LOGD("sender不是有效的DownloadTask对象");
+        LOGD("sender不是有效的DownloadTask对象（可能已被 deleteLater）");
     }
-    
+
     LOGD("onTaskFinished处理完成");
 }
 
 void DownloadManager::onTaskError(const QString& errorString)
 {
     LOGD(QString("接收到任务错误信号，错误信息:%1").arg(errorString));
-    
-    DownloadTask* task = qobject_cast<DownloadTask*>(sender());
-    if (task) {
+
+    // 用 QPointer 防止 sender() 返回已销毁的对象
+    DownloadTask* raw = qobject_cast<DownloadTask*>(sender());
+    QPointer<DownloadTask> safeTask(raw);
+    if (safeTask) {
+        DownloadTask* task = safeTask.data();
         LOGD(QString("任务有效，文件名:%1").arg(task->fileName()));
-        
+
         LOGD("发射taskError信号...");
         emit taskError(task, errorString);
         LOGD("taskError信号已发射");
-        
+
         // 错误发生后，任务也算"完成"，从列表中移除
         LOGD("从任务列表中移除错误任务...");
-        m_tasks.removeOne(task);
+        {
+            QMutexLocker locker(&g_tasksMutex);
+            m_tasks.removeOne(task);
+        }
         LOGD(QString("错误任务已从列表中移除，剩余任务数:%1").arg(m_tasks.size()));
-        
+
         LOGD("标记错误任务为延迟删除...");
         task->deleteLater();
         LOGD("错误任务已标记为延迟删除");
     } else {
-        LOGD("sender不是有效的DownloadTask对象");
+        LOGD("sender不是有效的DownloadTask对象（可能已被 deleteLater）");
     }
-    
+
     LOGD("onTaskError处理完成");
+}
+
+void DownloadManager::onSettingsChanged()
+{
+    // 拉取最新代理。其它设置（线程数/默认路径等）不影响 in-flight 任务，
+    // 由调用方在创建新任务时直接读 load*() 即可。
+    SettingsManager::ProxyType pt = SettingsManager::NoProxy;
+    QNetworkProxy proxy;
+    SettingsManager::instance().loadProxy(pt, proxy);
+    proxy.setType(static_cast<QNetworkProxy::ProxyType>(pt));
+
+    // 拷贝任务指针到 QPointer 后再调 applyProxy，避免任务在我们迭代期间被 deleteLater
+    QList<QPointer<DownloadTask>> snapshot;
+    {
+        QMutexLocker locker(&g_tasksMutex);
+        snapshot.reserve(m_tasks.size());
+        for (DownloadTask* task : m_tasks) {
+            snapshot.append(QPointer<DownloadTask>(task));
+        }
+    }
+    int applied = 0;
+    for (const QPointer<DownloadTask>& p : snapshot) {
+        DownloadTask* task = p.data();
+        if (!task) continue;
+        task->applyProxy(proxy);
+        ++applied;
+    }
+    LOGD(QString("DownloadManager::onSettingsChanged: 代理已推送给 %1 个活动任务").arg(applied));
 }

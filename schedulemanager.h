@@ -51,6 +51,13 @@ class ScheduleManager : public QObject
     Q_OBJECT
 
 public:
+    /**
+     * @brief 获取ScheduleManager的单例实例。
+     * @return ScheduleManager的唯一实例（指针形式，与外部调用约定保持兼容）。
+     *
+     * 注：实现采用函数局部static（Meyers singleton），与 SettingsManager 风格一致；
+     * 旧版使用裸 m_instance 指针的实现已移除，避免静态析构顺序和泄漏问题。
+     */
     static ScheduleManager* instance();
     
     /**
@@ -110,11 +117,16 @@ private slots:
 private:
     explicit ScheduleManager(QObject *parent = nullptr);
     ~ScheduleManager();
-    
-    static ScheduleManager* m_instance; ///< 单例实例
+
     QTimer* m_timer;                   ///< 定时器
     QMap<int, ScheduledTask> m_tasks;  ///< 定时任务映射
     int m_nextTaskId;                  ///< 下一个任务ID
+
+    /**
+     * @brief 重新计算某个任务的"下一次触发时间"。
+     * 使用 Qt::LocalTime 一致地处理重复任务与夏令时边界。
+     */
+    static QDateTime computeNextFire(const ScheduledTask& task, const QDateTime& now);
     
     /**
      * @brief 检查并执行到期的定时任务

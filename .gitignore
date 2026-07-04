@@ -33,9 +33,51 @@
 
 # build files and caches
 build/
+build-*/
 .cache/
 
 # cmake files
-CmakeLists.txt.user
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+Makefile
+make.bat
+CTestTestfile.cmake
 
+# Qt 中间产物（MOC/UIC/RCC 自动生成）
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+
+# 编辑器临时/备份
+*.bak
+*.tmp
+*.orig
+*.swp
+*~
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# installer
 installer/
+
+# 浏览器扩展产物（源码在 插件/，以下为打包/签名残留）
+*.crx
+*.pem
+
+# 本地端到端测试数据/产物（test_anti_range_server.py 留作可复用的脚本）
+test_anti_range.dat
+
+# 浏览器插件打包产物的 zip（含已打包扩展的本地分发，体积大且可重建）
+插件.zip
