@@ -82,6 +82,17 @@ static bool hostResolvesToPublicAddress(const QString &host, QString *errorOut)
         if (errorOut) *errorOut = QStringLiteral("empty host");
         return false;
     }
+    // 旁路：环境变量启用本地回环放行（与 httpserver.cpp 同步）。公网生产
+    // 部署不设置该环境变量，SSRF 拦截仍然生效。
+    static const bool allowLoopback = []() {
+        const QByteArray v = qgetenv("DOWNLOADER_ALLOW_LOOPBACK");
+        if (v.isEmpty()) return false;
+        const QString s = QString::fromLocal8Bit(v).trimmed().toLower();
+        return s == "1" || s == "true" || s == "yes";
+    }();
+    if (allowLoopback) {
+        return true;
+    }
     QHostAddress literal;
     if (literal.setAddress(host)) {
         if (isPrivateOrLoopbackIp(literal)) {

@@ -809,7 +809,7 @@ void DownloadTask::createHttpWorkers()
 
         LOGD(QString("创建worker%1 范围:%2-%3 临时文件:%4").arg(i).arg(startPoint).arg(endPoint).arg(tempFilePath));
 
-        HttpWorker* worker = new HttpWorker(m_url, tempFilePath, startPoint, endPoint);
+        HttpWorker* worker = new HttpWorker(m_url, tempFilePath, startPoint, endPoint, i);
         m_workers.append(worker);
 
         // worker 跑在自己的线程上（HttpWorker::run() 入口 moveToThread），
@@ -1037,11 +1037,23 @@ bool DownloadTask::mergeTempFile(const QString& tempFilePath, QFile& finalFile, 
 {
     QFile tempFile(tempFilePath);
     if (!tempFile.exists()) {
-        LOGD(QString("临时文件不存在，合并失败:%1").arg(tempFilePath));
-        return false;
+        // anti-Range 多 worker 协调下的预期结局：part1..partN 的 worker 检测到
+        // anti-Range 后会 abort + 删除 tmp 文件。mergeTempFile 把它们视为"无数据
+        // 可追加"，返回 true 让 mergeFiles 继续下一个 part（最终只 part0 实际贡献
+        // 整文件数据）。
+        LOGD(QString("临时文件不存在，视为 0 字节 part（anti-Range 已 reject）：%1").arg(tempFilePath));
+        return true;
     }
 
     qint64 tempFileSize = tempFile.size();
+    if (tempFileSize == 0) {
+        // 同上：worker 拒绝写入空 part 文件（part 文件已打开但未接收字节就被
+        // metaDataChanged 阻断），merge 时不追加。
+        LOGD(QString("临时文件 0 字节，视为无数据 part：%1").arg(tempFilePath));
+        tempFile.close();
+        return true;
+    }
+
     if (!tempFile.open(QIODevice::ReadOnly)) {
         LOGD(QString("无法打开临时文件进行读取:%1 错误:%2").arg(tempFilePath).arg(tempFile.errorString()));
         return false;

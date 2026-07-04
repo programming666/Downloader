@@ -11,17 +11,20 @@
  * @param filePath 文件保存路径
  * @param startPoint 下载起始字节位置
  * @param endPoint 下载结束字节位置
+ * @param partIndex 分片下标（0 = part0；-1 = 非多线程/legacy）。Anti-Range 服务器多 worker 协调用：
+ *                 仅 part0 切整文件重试，其余 part 直接 reject + 删除 tmp 文件。
  *
  * 初始化HTTP下载工作线程，设置网络请求和文件操作
  * 支持HTTP Range请求实现断点续传和多线程下载
  * 设置合理的HTTP头信息模拟浏览器行为
  */
-HttpWorker::HttpWorker(const QUrl& url, const QString& filePath, qint64 startPoint, qint64 endPoint)
+HttpWorker::HttpWorker(const QUrl& url, const QString& filePath, qint64 startPoint, qint64 endPoint, int partIndex)
     : QObject(nullptr),
       m_url(url),
       m_filePath(filePath),
       m_startPoint(startPoint),
       m_endPoint(endPoint),
+      m_partIndex(partIndex),
       m_bytesReceived(0),
       m_netManager(nullptr),
       m_reply(nullptr),
@@ -30,7 +33,8 @@ HttpWorker::HttpWorker(const QUrl& url, const QString& filePath, qint64 startPoi
       m_retryCount(0),
       m_alreadyFinished(false)
 {
-    LOGD(QString("构造HttpWorker - URL:%1 文件路径:%2 范围:%3-%4").arg(url.toString()).arg(filePath).arg(startPoint).arg(endPoint));
+    LOGD(QString("构造HttpWorker - URL:%1 文件路径:%2 范围:%3-%4 partIndex:%5")
+         .arg(url.toString()).arg(filePath).arg(startPoint).arg(endPoint).arg(partIndex));
     setAutoDelete(false); // 不自动删除，由DownloadTask管理
     LOGD("HttpWorker构造完成，设置为手动删除模式");
 }
@@ -274,9 +278,27 @@ void HttpWorker::continueDownload()
                 return;
             }
             const int statusCode = safeReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-            // 服务器忽略 Range：返回 200 + 完整内容
-            if (statusCode == 200) {
-                LOGD(QString("服务器忽略Range头(返回200 OK)，丢弃已下载字节并以单线程整文件模式重试"));
+            const bool serverIgnoredRange =
+                (statusCode == 200) ||
+                (statusCode == 206 && [&]() -> bool {
+                    const QByteArray contentRange = safeReply->rawHeader("Content-Range");
+                    const QString cr = QString::fromLatin1(contentRange);
+                    const int dashIdx = cr.indexOf('-');
+                    if (dashIdx <= 0) return false;
+                    const qint64 returnedStart = cr.left(dashIdx).toLongLong();
+                    return returnedStart != safeThis->m_startPoint + safeThis->m_resumeOffset;
+                }());
+            if (!serverIgnoredRange) {
+                return;
+            }
+            // 仅 part0 切整文件重试，其余 part（partIndex > 0 或单线程 legacy 无 partIndex）
+            // 立即 reject：删 tmp 文件 + abort + 走"预期内的 cancel"路径。
+            // 这样多线程 anti-Range 场景下，最终只有一个 part0 有完整数据，
+            // mergeFiles 顺序追加时整文件数据落在 part0 槽位上，part1..N 跳过
+            // （mergeTempFile 容错：文件不存在或 0 字节返回 true）。
+            const bool isPart0 = (safeThis->m_partIndex == 0);
+            if (isPart0) {
+                LOGD(QString("anti-Range 在 part0 (statusCode=%1)，切整文件重试").arg(statusCode));
                 // 截断已存在的部分文件，重新整文件下载
                 if (safeThis->m_file) {
                     safeThis->m_file->close();
@@ -307,41 +329,36 @@ void HttpWorker::continueDownload()
                 });
                 return;
             }
-            // 部分服务器可能返回 200 但 Content-Range 表明完整范围，这种情况下
-            // 也需要走单文件重试路径
-            if (statusCode == 206) {
-                const QByteArray contentRange = safeReply->rawHeader("Content-Range");
-                // Content-Range: bytes start-end/total
-                const QString cr = QString::fromLatin1(contentRange);
-                const int dashIdx = cr.indexOf('-');
-                if (dashIdx > 0) {
-                    const qint64 returnedStart = cr.left(dashIdx).toLongLong();
-                    if (returnedStart != safeThis->m_startPoint + safeThis->m_resumeOffset) {
-                        LOGD(QString("Content-Range起始字节(%1)与请求不符(期望%2)，丢弃已下载字节")
-                             .arg(returnedStart).arg(safeThis->m_startPoint + safeThis->m_resumeOffset));
-                        if (safeThis->m_file) {
-                            safeThis->m_file->close();
-                            QFile::remove(safeThis->m_filePath);
-                        }
-                        safeThis->m_endPoint = -1;
-                        safeThis->m_startPoint = 0;
-                        safeThis->m_resumeOffset = 0;
-                        safeThis->m_bytesReceived.store(0, std::memory_order_release);
-                        // 标记"预期内的 cancel"：见上面 200 路径注释
-                        safeThis->m_alreadyFinished = true;
-                        safeReply->abort();
-                        safeReply->deleteLater();
-                        safeThis->m_reply = nullptr;
-                        QTimer::singleShot(0, safeThis, [safeThis]() {
-                            if (safeThis && !safeThis->m_isStopped) {
-                                // 整文件重试：清掉 m_alreadyFinished 让 onFinished 正常 emit finished
-                                safeThis->m_alreadyFinished = false;
-                                safeThis->continueDownload();
-                            }
-                        });
-                    }
-                }
+            // anti-Range 在非 part0 的 worker 上：直接 reject，丢弃自己的 tmp 文件。
+            // 退出 event loop（abort 触发 OperationCanceledError，但已 m_alreadyFinished
+            // 守卫，onErrorOccurred 会跳过；onFinished 看到 m_alreadyFinished 会跳过 cleanup/quitLoop）。
+            LOGD(QString("anti-Range 在 part%1 (statusCode=%2)，reject：删除tmp+abort+emit finished")
+                 .arg(safeThis->m_partIndex).arg(statusCode));
+            if (safeThis->m_file) {
+                safeThis->m_file->close();
+                QFile::remove(safeThis->m_filePath);
             }
+            safeThis->m_resumeOffset = 0;
+            safeThis->m_bytesReceived.store(0, std::memory_order_release);
+            // 标记"预期内的 cancel"：abort 会触发 onErrorOccurred(OperationCanceledError)
+            // → 我们此前已经在 onErrorOccurred 里加了 guard：
+            //   if (code==OperationCanceled && m_alreadyFinished) return;
+            // 接着 onFinished 还会来一次，guard 也覆盖（m_alreadyFinished 已 true 直接跳过 cleanup/quitLoop）。
+            // 唯一要做的：emit finished 让 DownloadTask 知道我这个 part 已结束。
+            safeThis->m_alreadyFinished = true;
+            safeReply->abort();
+            safeReply->deleteLater();
+            safeThis->m_reply = nullptr;
+            // 注意：abort 后 Qt 还会把 onFinished 投到 worker 线程的事件循环，guard 会直接 return
+            // 不 cleanup / quitLoop。我们手工 quitLoop 让 run() 退出，否则 worker 会挂着。
+            QMetaObject::invokeMethod(safeThis.data(), [safeThis]() {
+                if (!safeThis) return;
+                // 防御：万一 onFinished 还没派发完，先 quitLoop，等其被 suppress。
+                // 直接调 quitLoop() 是同线程（worker 线程）安全路径。
+                safeThis->quitLoop();
+                // emit finished 让 DownloadTask 把这个 part 计入 finishedWorkers
+                emit safeThis->finished();
+            }, Qt::QueuedConnection);
         });
     }
 

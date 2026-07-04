@@ -121,11 +121,29 @@ static bool isPrivateOrLoopbackIp(const QHostAddress &addr)
 }
 
 // 同步解析主机名，3 秒超时；任一解析结果落在私有/回环段则拒绝。
+//
+// 旁路开关：当环境变量 DOWNLOADER_ALLOW_LOOPBACK 被设置为非空 / "1" / "true"
+// 时，跳过 SSRF 拦截。这是给本地端到端测试用的逃生口（开启后从浏览器插件
+// 或 HTTP 接口可以指向 127.0.0.1 / localhost，便于联调 anti-Range 等场景）。
+// 生产环境不设置即可维持原防御。
 static bool hostResolvesToPublicAddress(const QString &host, QString *errorOut)
 {
     if (host.isEmpty()) {
         if (errorOut) *errorOut = QStringLiteral("empty host");
         return false;
+    }
+
+    // 旁路：环境变量启用本地回环放行。仅用于本地联调/端到端验证，公网生产
+    // 部署不设置该环境变量，因此 SSRF 拦截仍然生效。
+    static const bool allowLoopback = []() {
+        const QByteArray v = qgetenv("DOWNLOADER_ALLOW_LOOPBACK");
+        if (v.isEmpty()) return false;
+        const QString s = QString::fromLocal8Bit(v).trimmed().toLower();
+        return s == "1" || s == "true" || s == "yes";
+    }();
+    if (allowLoopback) {
+        // 即使是 127.0.0.1 / localhost 也放行；不再走 DNS 解析与段检查。
+        return true;
     }
 
     // 字面 IP 路径

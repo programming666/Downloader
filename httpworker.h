@@ -28,10 +28,18 @@ public:
      * @param filePath 保存下载数据的临时文件路径。
      * @param startPoint 下载范围的起始字节。
      * @param endPoint 下载范围的结束字节。
+     * @param partIndex 本 worker 在本次下载中的分片下标（0 = part0，-1 = 单线程或 legacy）。
+     *                 用于 anti-Range 服务器协调：仅 part0 切整文件重试，其余 part 立即 reject。
      * @param parent 父QObject。
      */
-    explicit HttpWorker(const QUrl& url, const QString& filePath, qint64 startPoint, qint64 endPoint);
+    explicit HttpWorker(const QUrl& url, const QString& filePath, qint64 startPoint, qint64 endPoint, int partIndex = -1);
     ~HttpWorker();
+
+    /**
+     * @brief 本 worker 的分片下标（-1 表示非多线程场景）。
+     * DownloadTask 在 onWorkerFinished / mergeFiles 路径用于判定 anti-Range 协调。
+     */
+    int partIndex() const { return m_partIndex; }
 
     /**
      * @brief 读取本 worker 累计已接收字节数（原子读，跨线程安全）。
@@ -136,6 +144,7 @@ private:
     QString m_filePath;             ///< 临时文件的路径。
     qint64 m_startPoint;            ///< 下载范围的起始点。
     qint64 m_endPoint;              ///< 下载范围的结束点。
+    int m_partIndex = -1;           ///< 分片下标（0 = part0；-1 = 单线程或 legacy）。Anti-Range 服务器协调用。
     std::atomic<qint64> m_bytesReceived;     ///< 本会话已接收的字节数（原子类型，跨线程安全，支持>2GB文件）。
     qint64 m_resumeOffset{0};       ///< 从磁盘续传时检测到的已有字节数（仅一次设置，避免 m_bytesReceived 语义混淆）。
 
