@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
+#include <QTimer>
 /**
  * @brief 应用程序主入口函数
  * @param argc 命令行参数个数
@@ -75,6 +76,29 @@ int main(int argc, char *argv[])
     // 当浏览器插件发送下载请求时，主窗口会弹出新建任务对话框
     QObject::connect(httpServer, &HttpServer::newDownloadRequest,
                      &w, &MainWindow::onNewDownloadRequestFromBrowser);
+
+    // 端到端测试钩子：DOWNLOADER_AUTO_PAUSE_MS=N 启动后 N 毫秒自动 pause
+    // 第一个 Downloading 任务，便于 headless 复现"暂停选中"路径的 UI 响应。
+    // 生产环境不设置该环境变量即可维持原行为。
+    const QByteArray autoPauseMs = qgetenv("DOWNLOADER_AUTO_PAUSE_MS");
+    if (!autoPauseMs.isEmpty()) {
+        bool ok = false;
+        const int ms = autoPauseMs.toInt(&ok);
+        if (ok && ms > 0) {
+            QObject::connect(&DownloadManager::instance(), &DownloadManager::taskAdded,
+                             &a, [ms](DownloadTask* task) {
+                LOGD(QString("DOWNLOADER_AUTO_PAUSE_MS: 调度 %1ms 后 pause task %2")
+                     .arg(ms).arg(task->fileName()));
+                QTimer::singleShot(ms, qApp, [task]() {
+                    LOGD(QString("DOWNLOADER_AUTO_PAUSE_MS: 触发 pause task %1").arg(task->fileName()));
+                    DownloadManager::instance().pauseTask(task);
+                    LOGD(QString("DOWNLOADER_AUTO_PAUSE_MS: pauseTask 返回 task=%1").arg(task->fileName()));
+                });
+            });
+            qInfo() << "DOWNLOADER_AUTO_PAUSE_MS:" << ms
+                    << "- pause first Downloading task after that delay";
+        }
+    }
 
     // 进入Qt事件循环，等待用户交互和系统事件
     // 应用程序将保持运行状态，直到用户选择退出

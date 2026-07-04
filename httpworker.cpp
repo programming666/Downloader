@@ -53,6 +53,7 @@ void HttpWorker::reset()
     m_alreadyFinished = false;
     m_resumeOffset = 0;
     m_bytesReceived.store(0, std::memory_order_release);
+    m_progressAccumulator = 0;
     LOGD(QString("重置HttpWorker状态 - 文件:%1 范围:%2-%3")
          .arg(m_filePath).arg(m_startPoint).arg(m_endPoint));
 }
@@ -452,58 +453,46 @@ void HttpWorker::setProxy(const QNetworkProxy& proxy)
 
 /**
  * @brief 停止下载。
- * 线程安全：
- *  - 不论 caller 在哪个线程，都要把 m_reply 的 abort 切到 worker 线程执行
- *    （QNetworkReply 的 abort/readAll 不是线程安全的，必须在 this->thread() 调）。
- *  - 用 BlockingQueuedConnection 让 caller 等 worker 线程完成 abort，
- *    避免 caller 析构 worker 时 reply 还在飞。
+ * 线程安全：不论 caller 在哪个线程，都把 abort 投到 worker 线程的 m_loop 上
+ * 派发，**不再用 BlockingQueuedConnection**——之前的版本在多 worker 同时
+ * pause 时会让主线程 8 次顺序 BlockQueued 阻塞、事件循环彻底停摆，UI 无响应
+ * 数秒（表现为整窗冻死）。改为 QueuedConnection：caller 立即返回，worker
+ * 线程在 m_loop::exec() 中派发到 stop 时，只调 m_reply->abort() 一次；
+ * abort() 触发 onErrorOccurred(OperationCanceledError)，已存在的 guard
+ * （code==OperationCanceledError && m_isStopped）会兜底做 cleanup +
+ * emit finished + quitLoop，把 run() 拉回结束。
  */
 void HttpWorker::stop()
 {
     LOGD("停止HttpWorker");
     m_isStopped = true;
 
-    // 立即关闭文件：QFile::close 在 worker 线程里跑（this->thread() == worker 线程），
-    // 文件对象的所有权在 worker 线程，跨线程 close 会触发 QFile 的线程警告，
-    // 所以这里只在自己线程里 close。
     const QThread* myThread = this->thread();
     if (QThread::currentThread() == myThread) {
-        if (m_file && m_file->isOpen()) {
-            LOGD("立即关闭文件");
-            m_file->close();
-        }
-    }
-
-    if (QThread::currentThread() == myThread) {
-        // 在 worker 线程里直接处理 reply
-        if (m_reply) {
-            if (m_reply->isRunning()) {
-                LOGD("直接中止网络请求并清空缓冲区");
-                m_reply->abort();
-                m_reply->readAll();
-            }
-            m_reply->deleteLater();
-            m_reply = nullptr;
-        }
-        quitLoop();
-    } else {
-        // 从其他线程（通常是主线程）调过来，把 abort 切到 worker 线程并等返回
-        LOGD("跨线程停止HttpWorker，调度到 worker 线程");
-        QMetaObject::invokeMethod(this, [this]() {
-            if (m_reply) {
-                if (m_reply->isRunning()) {
-                    LOGD("通过 worker 线程中止网络请求并清空缓冲区");
-                    m_reply->abort();
-                    m_reply->readAll();
-                }
-                m_reply->deleteLater();
-                m_reply = nullptr;
-            }
-            if (m_file && m_file->isOpen()) {
-                m_file->close();
-            }
+        // worker 线程里直接 abort。abort 触发 onErrorOccurred(OperationCanceledError)
+        // → guard（m_isStopped==true）→ cleanup + quitLoop + return。
+        if (m_reply && m_reply->isRunning()) {
+            LOGD("同线程停止：直接 abort reply（error guard 兜底 quitLoop）");
+            m_reply->abort();
+        } else if (m_loop && m_loop->isRunning()) {
+            // reply 已经清空 / 完成场景，没有 error/finished 来 quitLoop，兜底主动 quit。
+            LOGD("同线程停止：reply 已不在，主动 quitLoop");
             quitLoop();
-        }, Qt::BlockingQueuedConnection);
+        }
+    } else {
+        // 跨线程：把 abort 投到 worker 线程的事件循环**非阻塞**（关键修复）。
+        // worker 在 m_loop->exec() 拉到这个事件，调 abort；abort 触发 onErrorOccurred
+        // 在 worker 线程的 guard 路径里 quitLoop，run() 退出。
+        LOGD("跨线程停止：调度 abort 到 worker 线程（非阻塞）");
+        QMetaObject::invokeMethod(this, [this]() {
+            if (m_reply && m_reply->isRunning()) {
+                LOGD("worker 线程派发：abort reply（error guard 兜底 quitLoop）");
+                m_reply->abort();
+            } else if (m_loop && m_loop->isRunning()) {
+                LOGD("worker 线程派发：reply 已不在，主动 quitLoop");
+                quitLoop();
+            }
+        }, Qt::QueuedConnection);
     }
 
     LOGD("HttpWorker完全停止");
@@ -542,7 +531,19 @@ void HttpWorker::onReadyRead()
         }
         // 使用 std::atomic 的 fetch_add（语义等于旧的 fetchAndAddRelease），无需再 store
         m_bytesReceived.fetch_add(dataSize, std::memory_order_release);
-        emit progress(dataSize);
+
+        // 节流 progress 信号：每累计 64KB 才向主线程 emit 一次。worker 高频
+        // readyRead 时每个 chunk 发信号会让 DownloadTask::onWorkerProgress +
+        // MainWindow::onTaskProgressUpdated 这条链在主线程上把整个事件循环
+        // 拖垮，表现为下载中 UI 无响应。下载进度本身的精度由 200ms
+        // m_speedCalculationTimer 内的 m_bytesReceivedByWorkers 累计（atomic）
+        // 保证，节流不影响最终进度正确性。
+        m_progressAccumulator += dataSize;
+        if (m_progressAccumulator >= kProgressEmitThreshold) {
+            const qint64 toEmit = m_progressAccumulator;
+            m_progressAccumulator = 0;
+            emit progress(toEmit);
+        }
 
         // 每接收1MB数据记录一次日志，避免日志过多
         const qint64 curBytes = m_bytesReceived.load(std::memory_order_acquire);

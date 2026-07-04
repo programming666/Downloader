@@ -128,18 +128,16 @@ private:
      * @brief 在主线程中开始下载。
      */
     void startDownload();
-    
+
     /**
      * @brief 继续执行下载逻辑。
      */
     void continueDownload();
-    
+
     /**
      * @brief 清理资源。
      */
     void cleanup();
-
-private:
     QUrl m_url;                     ///< 文件的URL。
     QString m_filePath;             ///< 临时文件的路径。
     qint64 m_startPoint;            ///< 下载范围的起始点。
@@ -156,6 +154,8 @@ private:
     int m_retryCount;               ///< 当前重试次数（实例成员，避免跨worker共享）。
     bool m_alreadyFinished;         ///< 标记finished/error是否已发射，避免重复发射。
     qint64 m_lastLoggedBytes{0};    ///< 上次记录日志时的字节数（实例成员，避免跨worker共享）。
+    qint64 m_progressAccumulator{0};///< progress 信号节流计数器（与 kProgressEmitThreshold 配合）。
+    static constexpr qint64 kProgressEmitThreshold = 64 * 1024;  ///< 每累计 64KB 才向主线程 emit 一次 progress。
 
     /// run() 内部事件循环：让 QNetworkReply 的 readyRead/finished 等信号在 worker
     /// 线程的事件循环里被消化。run() 入口 moveToThread 后，this->thread() == worker
