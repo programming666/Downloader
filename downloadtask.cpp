@@ -1083,30 +1083,20 @@ bool DownloadTask::mergeTempFile(const QString& tempFilePath, QFile& finalFile, 
 bool DownloadTask::validateFinalFile(qint64 totalBytesWritten, qint64 expectedSize)
 {
     QFileInfo finalFileInfo(m_filePath);
-    const qint64 actual = finalFileInfo.size();
-
-    if (actual == expectedSize && totalBytesWritten == expectedSize) {
-        LOGD(QString("最终文件大小验证通过:%1字节").arg(actual));
-        return true;
+    if (finalFileInfo.size() != expectedSize) {
+        LOGD(QString("最终文件大小与期望不符，实际:%1 期望:%2").arg(finalFileInfo.size()).arg(expectedSize));
+        QFile::remove(m_filePath);
+        return false;
     }
 
-    // partial-success tolerance：允许差 < tolerance 时视为成功（保留文件）。
-    // 现实原因：anti-range 服务器 / chunked transfer / server close 早于最后几个 TCP
-    // 包到达，会让 final file size 比 expectedSize 少几十~几百字节。容忍这个范围
-    // 让落盘文件能交付给用户，而 history 标 Completed + 一条警告日志。
-    if (expectedSize > 0 && totalBytesWritten == actual) {
-        const qint64 tolerance = partialDownloadTolerance(expectedSize);
-        if (actual < expectedSize && (expectedSize - actual) <= tolerance) {
-            LOGD(QString("validateFinalFile: actual=%1 expected=%2 差=%3 字节 < tolerance=%4，标 partial-success 保留文件")
-                 .arg(actual).arg(expectedSize).arg(expectedSize - actual).arg(tolerance));
-            return true;
-        }
+    if (finalFileInfo.size() != totalBytesWritten) {
+        LOGD(QString("最终文件大小与写入字节数不符，实际:%1 写入:%2").arg(finalFileInfo.size()).arg(totalBytesWritten));
+        QFile::remove(m_filePath);
+        return false;
     }
 
-    LOGD(QString("最终文件大小验证失败 actual=%1 written=%2 expected=%3")
-         .arg(actual).arg(totalBytesWritten).arg(expectedSize));
-    QFile::remove(m_filePath);
-    return false;
+    LOGD(QString("最终文件大小验证通过:%1字节").arg(finalFileInfo.size()));
+    return true;
 }
 
 bool DownloadTask::mergeFiles()
@@ -1152,16 +1142,9 @@ bool DownloadTask::mergeFiles()
     // （整文件流式下载直到服务器关闭连接），这种情况下没有期望大小可比对，
     // 只要 writtenBytes == tempFileSize （即多 part 一致）就视为成功。
     if (totalSize > 0 && totalBytesWritten != totalSize) {
-        // partial-success tolerance：见 validateFinalFile
-        const qint64 tolerance = partialDownloadTolerance(totalSize);
-        if (totalBytesWritten < totalSize && (totalSize - totalBytesWritten) <= tolerance) {
-            LOGD(QString("mergeFiles: written=%1 expected=%2 差=%3 字节 < tolerance=%4 视为 partial-success")
-                 .arg(totalBytesWritten).arg(totalSize).arg(totalSize - totalBytesWritten).arg(tolerance));
-        } else {
-            LOGD(QString("临时合并文件大小与期望不符，实际:%1 期望:%2").arg(totalBytesWritten).arg(totalSize));
-            QFile::remove(tempMergeFilePath);
-            return false;
-        }
+        LOGD(QString("临时合并文件大小与期望不符，实际:%1 期望:%2").arg(totalBytesWritten).arg(totalSize));
+        QFile::remove(tempMergeFilePath);
+        return false;
     }
 
     // 将临时合并文件移动到最终位置
@@ -1217,19 +1200,6 @@ int DownloadTask::getThreadCount() const
 {
     QMutexLocker locker(&m_mutex);
     return m_threadCount;
-}
-
-qint64 DownloadTask::partialDownloadTolerance(qint64 expectedSize)
-{
-    // 1% of expected（最少 64KB，最多 4MB）。封顶防止超大文件时 tolerance 不合理放大。
-    if (expectedSize <= 0) return 0;
-    const qint64 onePercent = expectedSize / 100;
-    constexpr qint64 kMin = 64 * 1024;
-    constexpr qint64 kMax = 4 * 1024 * 1024;
-    qint64 tol = onePercent;
-    if (tol < kMin) tol = kMin;
-    if (tol > kMax) tol = kMax;
-    return tol;
 }
 
 qint64 DownloadTask::getTotalSize() const

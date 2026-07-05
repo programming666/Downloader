@@ -278,16 +278,6 @@ private:
     bool validateFinalFile(qint64 totalBytesWritten, qint64 expectedSize);
 
     /**
-     * @brief 计算 partial-success 容忍字节数（最大）。
-     *
-     * 下载过程中网络/服务器可能少发最后几十~几百字节（如 anti-range server / chunked
-     * close 早于最后几个 TCP 包到达）。宽容 max(64KB, expectedSize/100) 让最后落盘
-     * 偏差在 tolerance 以内时把任务视为 Completed-partial（保留文件），而不是整任务
-     * 标记 Failed。
-     */
-    static qint64 partialDownloadTolerance(qint64 expectedSize);
-
-    /**
      * @brief 获取线程数。
      * @return 线程数。
      */
