@@ -70,7 +70,18 @@ ui_*.h
 Thumbs.db
 
 # installer
-installer/
+# Whitelist IFW metadata + scripts so they're tracked, ignore build outputs.
+# Gitignore each output directory individually so whitelist !-rules can re-include
+# source files in the parent.
+installer/temp/
+installer/output/
+installer/packages/com.downloader.app/data/
+# Un-ignore IFW metadata despite the *.app rule that would otherwise match
+# "com.downloader.app" (Qt's reversed-DNS package name).
+!installer/packages/com.downloader.app/
+!installer/packages/com.downloader.app/meta/
+!installer/packages/com.downloader.app/meta/*
+# portable/ stays tracked (we ship start.bat + README.txt in the source tree).
 
 # 浏览器扩展产物（源码在 插件/，以下为打包/签名残留）
 *.crx

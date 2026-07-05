@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Installer>
+    <Name>多线程下载器</Name>
+    <Version>1.0.0</Version>
+    <Title>多线程下载器安装程序</Title>
+    <Publisher>Programming666</Publisher>
+    <StartMenuDir>Downloader</StartMenuDir>
+    <TargetDir>@ApplicationsDir@/Downloader</TargetDir>
+    <WizardStyle>Classic</WizardStyle>
+    <Logo>icon.ico</Logo>
+</Installer>

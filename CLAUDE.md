@@ -26,7 +26,30 @@ cmake --build .
 
 Qt 路径在 `CMakeLists.txt:3` 硬编码，迁机或换 Qt 安装位置需要同步修改。`qt_generate_deploy_app_script` 会在安装时生成部署脚本。
 
-### 安装包构建
+### 安装包 + 便携版构建
+
+`tools/deploy.bat` 是统一入口，把 `build/Downloader.exe` 通过 `windeployqt` 展开成 `installer/temp/`，然后并行产出两个发布物：
+
+- `installer/portable/Downloader-portable.zip` —— 便携版，解压即用（自带 `start.bat` 和 `README.txt`），不写注册表。
+- `installer/output/DownloaderInstaller.exe` —— Qt Installer Framework 离线安装包，写 `HKCU` 协议注册项 + 桌面 / 开始菜单快捷方式。
+
+`tools/run_binarycreator.sh` 是给 `deploy.bat` 调的 Git Bash 适配层，因为 `binarycreator.exe` 在这台机上经 `cmd.exe` 拉起会静默吞掉输出（exit 0、文件没生成）。走 bash 就正常。
+
+```bash
+# 默认: 同时打 portable + installer
+tools\deploy.bat
+
+# 三种 mode 可选:
+tools\deploy.bat portable        # 只打 portable
+tools\deploy.bat installer       # 只打 installer
+tools\deploy.bat all             # 两者都打（默认）
+```
+
+支持环境变量覆写默认路径：`Qt6_DIR` / `IFW_PATH` / `SEVENZIP`。`installer/build.bat`（老接口、只跑 binarycreator）保留兼容，新工作流请走 `tools/deploy.bat`。
+
+Qt 路径在 `CMakeLists.txt:3` 硬编码，迁机或换 Qt 安装位置需要同步修改。`qt_generate_deploy_app_script` 会在安装时生成部署脚本。
+
+### 安装包构建（老路径，仍然有效）
 
 `installer/build.bat` 通过 Qt Installer Framework 的 `binarycreator` 把 `packages/` 打成 `output/DownloaderInstaller.exe`：
 
