@@ -7,6 +7,7 @@
 #include "schedulemanager.h"
 #include "systemtray.h"
 #include "protocolregistrar.h"
+#include "protocolregistrar.h"
 #include "newtaskdialog.h" // 新建任务对话框
 #include "settingsdialog.h" // 设置对话框
 #include "historydialog.h"
@@ -95,6 +96,31 @@ MainWindow::MainWindow(QWidget *parent)
     } else {
         LOGD("MainWindow: SingleInstance listen 失败，URL 协议唤起将 self-start 路径");
     }
+
+    // 启动后自动把 downloader:// 协议注册到当前 exe。第一次新装时让用户免去手动操作；
+    // 设置界面 SettingsDialog 仍有「注册到系统 / 取消注册」按钮，可强制更新或撤销。
+    // 用 DOWNLOADER_AUTO_REGISTER_PROTOCOL=0 可关闭（用于 CI / 强制场景）。
+    QTimer::singleShot(0, this, [this]() {
+        const QByteArray flag = qgetenv("DOWNLOADER_AUTO_REGISTER_PROTOCOL");
+        QString s = QString::fromLocal8Bit(flag).trimmed().toLower();
+        if (s == "0" || s == "false" || s == "no") {
+            LOGD("MainWindow: DOWNLOADER_AUTO_REGISTER_PROTOCOL=0，跳过自动注册");
+            return;
+        }
+        const QString currentExe = ProtocolRegistrar::currentExePath();
+        const QString registeredExe = SettingsManager::instance().loadProtocolTargetPath();
+        if (ProtocolRegistrar::isRegistered() && registeredExe == currentExe) {
+            // 已注册且目标一致，无需动作
+            return;
+        }
+        if (ProtocolRegistrar::registerWithCurrentExe()) {
+            SettingsManager::instance().saveProtocolRegistered(true);
+            SettingsManager::instance().saveProtocolTargetPath(currentExe);
+            LOGD(QString("MainWindow: 自动注册 downloader:// → %1").arg(currentExe));
+        } else {
+            LOGD("MainWindow: 自动注册 downloader:// 失败（可能被安全策略拦截）");
+        }
+    });
 }
 
 MainWindow::~MainWindow()
