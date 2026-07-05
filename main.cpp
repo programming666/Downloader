@@ -3,50 +3,138 @@
 #include "historymanager.h"
 #include "schedulemanager.h"
 #include "downloadmanager.h"
-#include "httpserver.h" // 包含HttpServer头文件
+#include "httpserver.h"
+#include "singleinstance.h"
+#include "protocolregistrar.h"
 #include "logger.h"
 
 #include <QApplication>
+#include <QCommandLineParser>
+#include <QCommandLineOption>
 #include <QLocale>
 #include <QDebug>
 #include <QFile>
 #include <QTextStream>
 #include <QDateTime>
 #include <QTimer>
+#include <QByteArray>
+
+namespace {
+
 /**
- * @brief 应用程序主入口函数
- * @param argc 命令行参数个数
- * @param argv 命令行参数数组
- * @return 应用程序退出码
- *
- * 主函数负责：
- * 1. 创建QApplication实例
- * 2. 设置应用程序元数据（组织名称、应用名称）
- * 3. 初始化单例管理器（设置、历史记录）
- * 4. 创建并显示主窗口（翻译器由 MainWindow 接管）
- * 5. 启动本地服务器接收浏览器插件请求
- * 6. 进入Qt事件循环
+ * @brief 从命令行首个非 option 参数尝试提 URL：http(s)://... 或 downloader://http(s)://...
+ * 协议唤起的 argv 形如："downloader://https%3A%2F%2Fexample.com%2Ffile.zip"。
+ * @return 真实 http/https URL；为空表示未识别。
  */
+QString extractUrlFromArg(const QString& arg)
+{
+    if (arg.isEmpty()) return {};
+    // 直接是 http(s)://
+    if (arg.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
+        || arg.startsWith(QLatin1String("https://"), Qt::CaseInsensitive)) {
+        return arg;
+    }
+    // 协议 URL: downloader://<encoded-real-url>
+    const QString prefix = QString::fromLatin1(ProtocolRegistrar::kScheme) + QStringLiteral("://");
+    if (arg.startsWith(prefix, Qt::CaseInsensitive)) {
+        QString real = arg.mid(prefix.size());
+        // 一些浏览器把冒号等做 URL-encode（%3A）；用 QUrl::fromPercentEncoding 解码
+        const QByteArray decoded = QByteArray::fromPercentEncoding(real.toUtf8());
+        real = QString::fromUtf8(decoded);
+        if (real.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
+            || real.startsWith(QLatin1String("https://"), Qt::CaseInsensitive)) {
+            return real;
+        }
+        // 也可能 downloader://https://example.com/... 没编码；保留 raw
+        return arg.mid(prefix.size());
+    }
+    return {};
+}
+
+} // namespace
+
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
 
     // 设置组织和应用程序名称，用于QSettings和QStandardPaths
-    // 这些信息用于确定配置文件和数据的存储位置
     QCoreApplication::setOrganizationName("Programming666");
     QCoreApplication::setApplicationName("Downloader");
 
-    // 初始化单例管理器（按依赖顺序预热，避免后续使用时的竞态条件）
-    // 顺序：SettingsManager (基础) -> HistoryManager (依赖 settings) ->
-    //       ScheduleManager (依赖 settings) -> DownloadManager (依赖所有)
+    // 命令行解析：识别 --register-protocol / --unregister-protocol / --open
+    QCommandLineParser parser;
+    parser.setApplicationDescription("Programming666 multi-thread downloader");
+    parser.addHelpOption();
+    QCommandLineOption optRegister(QStringLiteral("register-protocol"),
+                                    QStringLiteral("Register downloader:// URL scheme to current exe and exit."));
+    QCommandLineOption optUnregister(QStringLiteral("unregister-protocol"),
+                                      QStringLiteral("Unregister downloader:// URL scheme and exit."));
+    QCommandLineOption optOpen(QStringLiteral("open"),
+                                QStringLiteral("Receive a download URL (use with --open <url>); can also be positional."),
+                                QStringLiteral("url"));
+    parser.addOption(optRegister);
+    parser.addOption(optUnregister);
+    parser.addOption(optOpen);
+    parser.addPositionalArgument(QStringLiteral("url"),
+                                 QStringLiteral("Optional downloader:// (or http/https) URL."),
+                                 QStringLiteral("[url]"));
+    parser.process(a);
+
+    // 预热 SettingsManager（CLI 路径需要它持久化注册状态）
     SettingsManager::instance();
+
+    // CLI 注册 / 取消注册：直接执行完退出，不进事件循环
+    if (parser.isSet(optRegister)) {
+        const bool ok = ProtocolRegistrar::registerWithCurrentExe();
+        if (ok) {
+            SettingsManager::instance().saveProtocolRegistered(true);
+            SettingsManager::instance().saveProtocolTargetPath(ProtocolRegistrar::currentExePath());
+        }
+        // 释放 SettingsManager 让 QSettings sync 落盘；并显式排空事件队列
+        // （QSettings::sync 需要事件循环触发 deferred sync 在某些 Windows API back-end 下）
+        QCoreApplication::processEvents();
+        return ok ? 0 : 1;
+    }
+    if (parser.isSet(optUnregister)) {
+        const bool ok = ProtocolRegistrar::unregister();
+        if (ok) {
+            SettingsManager::instance().saveProtocolRegistered(false);
+        }
+        QCoreApplication::processEvents();
+        return ok ? 0 : 1;
+    }
+
+    // 提取 URL：先看 --open 选项，否则看 positional 第一项
+    QString pendingUrl;
+    if (parser.isSet(optOpen)) {
+        pendingUrl = parser.value(optOpen);
+    } else {
+        const QStringList pos = parser.positionalArguments();
+        if (!pos.isEmpty()) {
+            pendingUrl = pos.first();
+        }
+    }
+    const QString realUrl = extractUrlFromArg(pendingUrl);
+    const bool hasIncomingUrl = !realUrl.isEmpty();
+
+    // 单实例转发：若已有实例在运行，把 URL 转发给旧实例后退出
+    if (hasIncomingUrl) {
+        const QString prefix = QString::fromLatin1(ProtocolRegistrar::kScheme) + QStringLiteral("://");
+        const QByteArray payload = (prefix + realUrl + QLatin1Char('\n')).toUtf8();
+        LOGD(QString("main: 尝试单实例转发: %1").arg(QString::fromUtf8(payload)));
+        if (SingleInstance::tryForward(payload)) {
+            LOGD("main: 转发成功，进程退出");
+            return 0;
+        }
+        LOGD("main: 转发失败（旧实例不在），继续 self-start 路径");
+    }
+
+    // 预热剩下的单例
     HistoryManager::instance();
     ScheduleManager::instance();
     DownloadManager::instance();
 
-    // 翻译器由 MainWindow 接管：MainWindow 构造时会根据系统语言加载并 install，
-    // 后续用户切换语言也由 MainWindow 统一管理（QTranslator 生命周期由 m_translator 持有）。
-    // 若翻译加载失败应当输出警告（之前默认悄无声息地回退到英文）。
+    // 翻译探测（同原行为）
     {
         QTranslator probeTranslator;
         bool loaded = probeTranslator.load(QString(":/i18n/%1.qm").arg(QLocale::system().name()));
@@ -62,8 +150,7 @@ int main(int argc, char *argv[])
     MainWindow w;
     w.show();
 
-    // 启动HTTP服务器，接收浏览器插件的下载请求
-    // 使用堆对象并以主窗口为父对象，确保释放顺序：HttpServer 在 MainWindow 之前析构
+    // 启动 HTTP 服务器（接收浏览器插件请求）
     HttpServer* httpServer = new HttpServer(&w);
     quint16 listenPort = SettingsManager::instance().loadLocalListenPort();
     if (!httpServer->startServer(listenPort)) {
@@ -71,15 +158,10 @@ int main(int argc, char *argv[])
     } else {
         LOGD(QString("HTTP server listening on port %1").arg(listenPort));
     }
-
-    // 连接HTTP服务器信号到主窗口槽函数
-    // 当浏览器插件发送下载请求时，主窗口会弹出新建任务对话框
     QObject::connect(httpServer, &HttpServer::newDownloadRequest,
                      &w, &MainWindow::onNewDownloadRequestFromBrowser);
 
-    // 端到端测试钩子：DOWNLOADER_AUTO_PAUSE_MS=N 启动后 N 毫秒自动 pause
-    // 第一个 Downloading 任务，便于 headless 复现"暂停选中"路径的 UI 响应。
-    // 生产环境不设置该环境变量即可维持原行为。
+    // 端到端测试钩子（保留现有行为）
     const QByteArray autoPauseMs = qgetenv("DOWNLOADER_AUTO_PAUSE_MS");
     if (!autoPauseMs.isEmpty()) {
         bool ok = false;
@@ -100,7 +182,14 @@ int main(int argc, char *argv[])
         }
     }
 
-    // 进入Qt事件循环，等待用户交互和系统事件
-    // 应用程序将保持运行状态，直到用户选择退出
+    // 启动入口 URL：Self-start 路径下（没旧实例接），把 URL 喂到 MainWindow 入队
+    if (hasIncomingUrl) {
+        // 延后一拍，等 MainWindow 的 onUiUpdateTimer 等 ready
+        const QString captured = realUrl;
+        QTimer::singleShot(0, &w, [&w, captured]() {
+            w.handleInitialPayload(captured);
+        });
+    }
+
     return a.exec();
 }

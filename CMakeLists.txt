@@ -62,6 +62,10 @@ qt_add_executable(Downloader
     historydialog.h
     historydialog.ui
     icon.qrc
+    singleinstance.cpp
+    singleinstance.h
+    protocolregistrar.cpp
+    protocolregistrar.h
 )
 # 自动 lrelease: 把 translations/*.ts 编译成 /i18n/*.qm 资源（替代手写 qrc 引用）。
 qt_add_translations(Downloader TS_FILES translations/zh_CN.ts translations/en_US.ts)
@@ -73,6 +77,11 @@ target_link_libraries(Downloader
         Qt6::Gui
         Qt6::Concurrent
 )
+# URL Protocol 注册（HKCU\Software\Classes\downloader）依赖 Windows 注册表 API，
+# 仅在 Windows 平台 link advapi32。
+if(WIN32)
+    target_link_libraries(Downloader PRIVATE advapi32)
+endif()
 target_compile_features(Downloader PRIVATE cxx_std_17)
 # 如果HttpServer模块可用，则链接它
 if(TARGET Qt6::HttpServer)

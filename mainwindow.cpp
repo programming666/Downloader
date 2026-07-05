@@ -1,8 +1,15 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "logger.h"
+#include "downloadmanager.h"
+#include "settingsmanager.h"
+#include "historymanager.h"
+#include "schedulemanager.h"
+#include "systemtray.h"
+#include "protocolregistrar.h"
 #include "newtaskdialog.h" // 新建任务对话框
 #include "settingsdialog.h" // 设置对话框
+#include "historydialog.h"
 #include "historymanager.h" // 历史管理器
 #include <QFileDialog>
 #include <QMessageBox>
@@ -77,6 +84,17 @@ MainWindow::MainWindow(QWidget *parent)
     // 设置UI更新定时器
     connect(m_uiUpdateTimer, &QTimer::timeout, this, &MainWindow::onUiUpdateTimerTimeout);
     m_uiUpdateTimer->start(200); // 每200毫秒更新一次
+
+    // 单实例：start Listening 接收其它 Downloader 进程经 downloader:// 转发的 URL。
+    // listen 失败（极少见，比如 Windows 系统级权限拒绝）时不影响 UI 正常使用，
+    // 只是后续 downloader:// 唤起会再次新开进程而非转发到当前实例。
+    m_singleInstance = new SingleInstance(this);
+    if (m_singleInstance->startListening()) {
+        connect(m_singleInstance, &SingleInstance::messageReceived,
+                this, &MainWindow::onSingleInstanceMessage);
+    } else {
+        LOGD("MainWindow: SingleInstance listen 失败，URL 协议唤起将 self-start 路径");
+    }
 }
 
 MainWindow::~MainWindow()
@@ -1410,10 +1428,61 @@ void MainWindow::on_actionScheduleTask_triggered()
 void MainWindow::on_actionViewHistory_triggered()
 {
     LOGD("查看历史记录按钮被点击");
-    
+
     // 创建历史记录对话框
     HistoryDialog historyDialog(this);
     historyDialog.exec();
-    
+
     LOGD("历史记录对话框关闭");
+}
+
+void MainWindow::handleInitialPayload(const QString& realUrl)
+{
+    LOGD(QString("MainWindow::handleInitialPayload: %1").arg(realUrl));
+    // 走与 HttpServer 完全相同的入队路径：savePath 留空由 MainWindow::onNewDownloadRequestFromBrowser
+    // 自动归一化到默认下载目录，再发 tray 通知。
+    onNewDownloadRequestFromBrowser(realUrl, QString());
+}
+
+void MainWindow::onSingleInstanceMessage(const QByteArray& payload)
+{
+    LOGD(QString("MainWindow::onSingleInstanceMessage: %1 字节").arg(payload.size()));
+
+    // payload 协议：单行 "downloader://<realUrl>\n"。剥前缀 + 行尾。
+    static const QString prefix = QString::fromLatin1(ProtocolRegistrar::kScheme)
+                                 + QStringLiteral("://");
+    QString line = QString::fromUtf8(payload);
+    while (!line.isEmpty() && (line.endsWith(QLatin1Char('\n')) || line.endsWith(QLatin1Char('\r')))) {
+        line.chop(1);
+    }
+    if (line.startsWith(prefix, Qt::CaseInsensitive)) {
+        const QString real = line.mid(prefix.size());
+        if (real.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
+            || real.startsWith(QLatin1String("https://"), Qt::CaseInsensitive)) {
+            onNewDownloadRequestFromBrowser(real, QString());
+            // 抢到焦点让用户看到通知/任务列表
+            if (isMinimized()) showNormal();
+            raise();
+            activateWindow();
+            if (m_systemTray) {
+                m_systemTray->showMessage(
+                    tr("Downloader"),
+                    tr("收到唤起请求：%1").arg(real),
+                    QSystemTrayIcon::Information,
+                    4000);
+            }
+        } else {
+            LOGD(QString("MainWindow::onSingleInstanceMessage: payload URL 不合法: %1").arg(real));
+            if (m_systemTray) {
+                m_systemTray->showMessage(
+                    tr("Downloader"),
+                    tr("收到不合法 URL：%1").arg(real),
+                    QSystemTrayIcon::Warning,
+                    4000);
+            }
+        }
+    } else {
+        LOGD(QString("MainWindow::onSingleInstanceMessage: 未知 payload: %1")
+             .arg(QString::fromUtf8(payload.left(64))));
+    }
 }

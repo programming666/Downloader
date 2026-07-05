@@ -1,6 +1,8 @@
 #include "settingsdialog.h"
 #include "ui_settingsdialog.h"
 #include "settingsmanager.h"
+#include "protocolregistrar.h"
+#include "logger.h"
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDir>
@@ -152,6 +154,16 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     ui->proxyPortSpinBox->setRange(1, 65535);
     ui->localListenPortSpinBox->setRange(1, 65535);
     ui->defaultThreadsSpinBox->setRange(1, 32);
+
+    // 协议注册/反注册按钮（auto connect：方法名符合 on_<object>_<signal> 格式，但
+    // 这里 on_xxx_clicked 用的是 _clicked 后缀，为了确定性我们手动 connect 一下）。
+    connect(ui->registerProtocolButton, &QPushButton::clicked,
+            this, &SettingsDialog::on_registerProtocolButton_clicked);
+    connect(ui->unregisterProtocolButton, &QPushButton::clicked,
+            this, &SettingsDialog::on_unregisterProtocolButton_clicked);
+
+    // 初次打开对话框时把当前注册表状态刷新到 label
+    refreshProtocolStatusUi();
 }
 
 SettingsDialog::~SettingsDialog()
@@ -270,4 +282,59 @@ void SettingsDialog::on_applyButton_clicked()
 void SettingsDialog::on_cancelButton_clicked()
 {
     reject(); // 关闭对话框，不保存更改
+}
+
+void SettingsDialog::on_registerProtocolButton_clicked()
+{
+    LOGD("SettingsDialog: 注册 downloader:// 协议");
+    if (!ProtocolRegistrar::registerWithCurrentExe()) {
+        QMessageBox::warning(this, tr("注册失败"),
+                             tr("无法写入注册表 (HKCU\\Software\\Classes\\downloader)。\n"
+                                "请检查当前用户权限，或尝试以管理员权限运行 Downloader。"));
+        refreshProtocolStatusUi();
+        return;
+    }
+    SettingsManager::instance().saveProtocolRegistered(true);
+    SettingsManager::instance().saveProtocolTargetPath(ProtocolRegistrar::currentExePath());
+    QMessageBox::information(this, tr("注册成功"),
+                             tr("downloader:// 协议已注册到当前程序。\n"
+                                "现在可在浏览器/资源管理器地址栏粘贴:\n"
+                                "  downloader://https://example.com/file.zip\n"
+                                "来直接唤起下载器。"));
+    refreshProtocolStatusUi();
+}
+
+void SettingsDialog::on_unregisterProtocolButton_clicked()
+{
+    LOGD("SettingsDialog: 取消注册 downloader:// 协议");
+    if (!ProtocolRegistrar::unregister()) {
+        QMessageBox::warning(this, tr("取消注册失败"),
+                             tr("无法清空注册表项 (HKCU\\Software\\Classes\\downloader)。"));
+        refreshProtocolStatusUi();
+        return;
+    }
+    SettingsManager::instance().saveProtocolRegistered(false);
+    QMessageBox::information(this, tr("已取消注册"),
+                             tr("downloader:// 协议已从系统清空。"));
+    refreshProtocolStatusUi();
+}
+
+void SettingsDialog::refreshProtocolStatusUi()
+{
+    if (!ui || !ui->protocolStatusLabel) {
+        return;
+    }
+    const QString cmd = ProtocolRegistrar::registeredCommand();
+    const QString registeredExe = SettingsManager::instance().loadProtocolTargetPath();
+    const QString currentExe = ProtocolRegistrar::currentExePath();
+
+    if (cmd.isEmpty()) {
+        ui->protocolStatusLabel->setText(tr("状态: 未注册"));
+    } else if (!registeredExe.isEmpty() && registeredExe != currentExe) {
+        // 上次记录的 exe 与当前 exe 不一致（exe 搬家了）→ 提示用户重新注册
+        ui->protocolStatusLabel->setText(tr("状态: 已注册，但目标 EXE 已变更（%1 → %2），请重新注册")
+                                         .arg(registeredExe, currentExe));
+    } else {
+        ui->protocolStatusLabel->setText(tr("状态: 已注册 (%1)").arg(currentExe));
+    }
 }

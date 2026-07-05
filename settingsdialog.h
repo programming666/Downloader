@@ -46,6 +46,16 @@ private slots:
      */
     void on_cancelButton_clicked();
 
+    /**
+     * @brief 处理“注册到系统”按钮点击事件，把 downloader:// 协议写入注册表。
+     */
+    void on_registerProtocolButton_clicked();
+
+    /**
+     * @brief 处理“取消注册”按钮点击事件，清空 downloader:// 协议。
+     */
+    void on_unregisterProtocolButton_clicked();
+
 private:
     Ui::SettingsDialog *ui; ///< UI界面指针。
 
@@ -58,6 +68,12 @@ private:
      * @brief 从UI控件保存设置。
      */
     void saveSettingsFromUi();
+
+    /**
+     * @brief 刷新 protocolStatusLabel：根据注册表实际状态展示文本。
+     * 每次打开对话框 / 注册 / 取消注册 / 应用按钮都应调用一次。
+     */
+    void refreshProtocolStatusUi();
 };
 
 #endif // SETTINGSDIALOG_H

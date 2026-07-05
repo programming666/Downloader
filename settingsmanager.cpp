@@ -27,6 +27,10 @@ const QString SettingsManager::KEY_SILENT_MODE = "SilentMode";
 const QString SettingsManager::GROUP_SECURITY = "Security";
 const QString SettingsManager::KEY_BEARER_TOKEN = "BearerToken";
 
+const QString SettingsManager::GROUP_PROTOCOL = "Protocol";
+const QString SettingsManager::KEY_PROTOCOL_REGISTERED = "Registered";
+const QString SettingsManager::KEY_PROTOCOL_TARGET_PATH = "TargetPath";
+
 const QString SettingsManager::GROUP_META = "Meta";
 const QString SettingsManager::KEY_SCHEMA_VERSION = "SchemaVersion";
 
@@ -265,6 +269,40 @@ void SettingsManager::setBearerToken(const QString& token)
     m_settings->setValue(KEY_BEARER_TOKEN, token);
     m_settings->endGroup();
     m_settings->sync();
+}
+
+bool SettingsManager::loadProtocolRegistered() const
+{
+    m_settings->beginGroup(GROUP_PROTOCOL);
+    const bool v = m_settings->value(KEY_PROTOCOL_REGISTERED, false).toBool();
+    m_settings->endGroup();
+    return v;
+}
+
+void SettingsManager::saveProtocolRegistered(bool registered)
+{
+    m_settings->beginGroup(GROUP_PROTOCOL);
+    m_settings->setValue(KEY_PROTOCOL_REGISTERED, registered);
+    m_settings->endGroup();
+    m_settings->sync();
+    emit settingsChanged();
+}
+
+QString SettingsManager::loadProtocolTargetPath() const
+{
+    m_settings->beginGroup(GROUP_PROTOCOL);
+    const QString v = m_settings->value(KEY_PROTOCOL_TARGET_PATH).toString();
+    m_settings->endGroup();
+    return v;
+}
+
+void SettingsManager::saveProtocolTargetPath(const QString& path)
+{
+    m_settings->beginGroup(GROUP_PROTOCOL);
+    m_settings->setValue(KEY_PROTOCOL_TARGET_PATH, path);
+    m_settings->endGroup();
+    m_settings->sync();
+    emit settingsChanged();
 }
 
 void SettingsManager::migrate()

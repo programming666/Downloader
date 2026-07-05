@@ -123,6 +123,31 @@ public:
     void setBearerToken(const QString& token);
 
     /**
+     * @brief 加载自定义 URL Protocol 注册状态。
+     * @return true 表示用户曾在本机注册过 downloader:// 协议；纯 UI 提示用，不强制以它为准。
+     */
+    bool loadProtocolRegistered() const;
+
+    /**
+     * @brief 保存自定义 URL Protocol 注册状态。
+     * @param registered 是否注册。
+     */
+    void saveProtocolRegistered(bool registered);
+
+    /**
+     * @brief 加载注册过的 exe 路径（与当前 process 的 applicationFilePath 对比，
+     *        若不一致提示用户重新注册）。
+     * @return 注册时记录的 exe 路径；空表示未记录。
+     */
+    QString loadProtocolTargetPath() const;
+
+    /**
+     * @brief 保存注册时的 exe 路径。
+     * @param path 完整 exe 路径。
+     */
+    void saveProtocolTargetPath(const QString& path);
+
+    /**
      * @brief 执行版本迁移。检查版本键，对老版本schema应用必要的迁移。
      *
      * 每次写入时如果版本不匹配，会执行一次升级步骤。当前仅做占位，
@@ -179,6 +204,10 @@ private:
 
     static const QString GROUP_SECURITY;
     static const QString KEY_BEARER_TOKEN;
+
+    static const QString GROUP_PROTOCOL;
+    static const QString KEY_PROTOCOL_REGISTERED;
+    static const QString KEY_PROTOCOL_TARGET_PATH;
 
     static const QString GROUP_META;
     static const QString KEY_SCHEMA_VERSION;

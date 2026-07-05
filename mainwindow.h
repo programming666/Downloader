@@ -26,6 +26,7 @@
 #include "settingsmanager.h"
 #include "historymanager.h"
 #include "schedulemanager.h"
+#include "singleinstance.h"
 #include "scheduledialog.h"
 #include "historydialog.h"
 
@@ -67,6 +68,22 @@ public slots:
      * @param savePath 建议的保存路径。
      */
     void onNewDownloadRequestFromBrowser(const QString& url, const QString& savePath);
+
+    /**
+     * @brief 启动入口 URL 注入（main.cpp 单实例 self-start 路径上调用）。
+     *
+     * 当旧实例不在、又收到 downloader:// 或 http(s) URL 时，main.cpp 把 URL 喂进来，
+     * 走与 HttpServer 完全相同的路径入队。不弹 NewTaskDialog（用户决策），改由
+     * SystemTray 推通知。
+     */
+    void handleInitialPayload(const QString& realUrl);
+
+private slots:
+    /**
+     * @brief SingleInstance::messageReceived 槽：被旧实例接管后，
+     * main.cpp 把 URL 转发到主进程；解 payload 前缀后调 onNewDownloadRequestFromBrowser 入队。
+     */
+    void onSingleInstanceMessage(const QByteArray& payload);
 
 private slots:
     /**
@@ -228,6 +245,7 @@ private:
     SettingsManager& m_settingsManager; ///< 设置管理器实例，处理用户偏好设置和持久化
     HistoryManager& m_historyManager;   ///< 历史管理器实例，记录和管理下载历史
     SystemTray* m_systemTray;           ///< 系统托盘实例，提供后台运行和通知功能
+    SingleInstance* m_singleInstance = nullptr; ///< 单实例监听（QLocalServer）；接收其它进程经 downloader:// 协议转发过来的 URL
     QTimer* m_uiUpdateTimer;            ///< UI更新定时器，用于节流频繁的UI更新
     /// 待更新UI的任务集合，用于批量更新任务状态。
     /// 用 QPointer 包装，task 可能在 UI 刷新前被 deleteLater；遍历前判空。
