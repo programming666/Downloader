@@ -282,12 +282,24 @@ void HttpWorker::continueDownload()
             const bool serverIgnoredRange =
                 (statusCode == 200) ||
                 (statusCode == 206 && [&]() -> bool {
+                    // Content-Range: "bytes <start>-<end>/<total>"
                     const QByteArray contentRange = safeReply->rawHeader("Content-Range");
                     const QString cr = QString::fromLatin1(contentRange);
+                    // 解析 start
                     const int dashIdx = cr.indexOf('-');
                     if (dashIdx <= 0) return false;
                     const qint64 returnedStart = cr.left(dashIdx).toLongLong();
-                    return returnedStart != safeThis->m_startPoint + safeThis->m_resumeOffset;
+                    // 解析 end 和 total
+                    const QString afterDash = cr.mid(dashIdx + 1);
+                    const int slashIdx = afterDash.indexOf('/');
+                    if (slashIdx <= 0) return false;
+                    const qint64 returnedEnd = afterDash.left(slashIdx).toLongLong();
+                    // expected 由请求 Range 决定：bytes A-B，A = m_startPoint + m_resumeOffset，
+                    // B = m_endPoint（endPoint>=0 时）。
+                    const qint64 expectedStart = safeThis->m_startPoint + safeThis->m_resumeOffset;
+                    const qint64 expectedEnd = safeThis->m_endPoint;
+                    // 任一维度不匹配都视为 anti-Range（部分服务器只始对终对、终对始错等）
+                    return returnedStart != expectedStart || returnedEnd != expectedEnd;
                 }());
             if (!serverIgnoredRange) {
                 return;
@@ -571,6 +583,35 @@ void HttpWorker::onFinished()
         LOGD("onFinished 但 m_reply 为空，跳过处理");
         quitLoop();
         return;
+    }
+
+    // 在声明"完成"前，最后一次 readAll 把 Qt 内部 / OS socket 缓冲里尚未
+    // 通过 readyRead 派发的最后一段数据排空。Qt 在 server 关闭 socket 后可能
+    // 投 finished 之前最后一两个 chunk 没来得及转成 readyRead（Windows + Qt
+    // QNetworkReply 的已知 race：recv 返回 0 → finished，但同 recv buffer 里的
+    // 末尾字节没人消费）。如果直接进入"NoError"路径发 finished，文件会缺
+    // 最后几百字节（实测 anti-range 10MB 文件损失 ~779 字节）。这里把残留
+    // 的所有字节强制读出来写入文件，确保 size == Content-Length。
+    {
+        QByteArray tailData = m_reply->readAll();
+        const qint64 tailSize = tailData.size();
+        if (tailSize > 0) {
+            LOGD(QString("onFinished 排空尾部 bytes:%1").arg(tailSize));
+            if (m_file && m_file->isOpen()) {
+                const qint64 written = m_file->write(tailData);
+                if (written != tailSize) {
+                    LOGD(QString("尾部写入不完整，期望:%1 实际:%2").arg(tailSize).arg(written));
+                }
+                m_bytesReceived.fetch_add(tailSize, std::memory_order_release);
+                // 也走 progress 节流逻辑，避免主线程被卡
+                m_progressAccumulator += tailSize;
+                if (m_progressAccumulator >= kProgressEmitThreshold) {
+                    const qint64 toEmit = m_progressAccumulator;
+                    m_progressAccumulator = 0;
+                    emit progress(toEmit);
+                }
+            }
+        }
     }
 
     if (m_reply->error() == QNetworkReply::NoError) {
