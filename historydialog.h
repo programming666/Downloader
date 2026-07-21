@@ -31,6 +31,14 @@ private slots:
     void onDateFromChanged(const QDate &date);
     void onDateToChanged(const QDate &date);
 
+protected:
+    /**
+     * @brief 接 QEvent::LanguageChange：当前应用翻译器变化时 Qt 会派发该事件；
+     * 调用 ui->retranslateUi(this) 让对话框文案跟随语言切换更新；同时按需
+     * 重排行内 cell widget 的 tooltip。
+     */
+    void changeEvent(QEvent* event) override;
+
 private:
     void loadHistory();
     void updateTable();

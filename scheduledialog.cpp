@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QRegularExpression>
+#include <QEvent>
 
 ScheduleDialog::ScheduleDialog(QWidget *parent) :
     QDialog(parent),
@@ -43,6 +44,41 @@ ScheduleDialog::ScheduleDialog(QWidget *parent) :
 ScheduleDialog::~ScheduleDialog()
 {
     delete ui;
+}
+
+void ScheduleDialog::changeEvent(QEvent* event)
+{
+    if (event && event->type() == QEvent::LanguageChange) {
+        // 重新翻译 .ui 中的所有固定字符串。
+        ui->retranslateUi(this);
+
+        // comboScheduleType 的下拉条目在 .ui 里写死中文，retranslateUi 不会改
+        // 它们，需要手动按当前索引重写。
+        const int typeIdx = ui->comboScheduleType->currentIndex();
+        if (ui->comboScheduleType->count() >= 3) {
+            ui->comboScheduleType->setItemText(0, tr("立即开始"));
+            ui->comboScheduleType->setItemText(1, tr("指定时间"));
+            ui->comboScheduleType->setItemText(2, tr("延迟开始"));
+            ui->comboScheduleType->setCurrentIndex(typeIdx);
+        }
+
+        // 同样的处理：延迟单位下拉（分钟/小时）。
+        const int delayIdx = ui->comboDelayUnit->currentIndex();
+        if (ui->comboDelayUnit->count() >= 2) {
+            ui->comboDelayUnit->setItemText(0, tr("分钟"));
+            ui->comboDelayUnit->setItemText(1, tr("小时"));
+            ui->comboDelayUnit->setCurrentIndex(delayIdx);
+        }
+
+        // 重复间隔的单位标签是 label_6（"小时"），需要重新 setText。
+        ui->label_6->setText(tr("小时"));
+        // groupBox 标题、groupBox_2 标题在 retranslateUi 会刷新（来自 .ui 中的
+        // <property name="title">），但若 .ui 没标 tr（标题里都已经是中文），仍
+        // 可能不刷新。这里兜底再写一次。
+        ui->groupBox->setTitle(tr("定时设置"));
+        ui->groupBox_2->setTitle(tr("任务信息"));
+    }
+    QDialog::changeEvent(event);
 }
 
 void ScheduleDialog::setTaskInfo(const QString& fileName, const QString& url)

@@ -1,5 +1,6 @@
 #include "systemtray.h"
 #include "logger.h"
+#include "settingsmanager.h"
 #include <QPointer>
 #include <QTimer>
 
@@ -67,6 +68,15 @@ SystemTray::SystemTray(QMainWindow* mainWindow, QObject *parent)
 
     // 设置托盘图标菜单
     m_trayIcon->setContextMenu(m_trayMenu);
+
+    // 语言切换广播：实时刷新"显示主界面"/"退出"的 menu 文案与 tooltip，
+    // 避免在英文界面下仍显示"显示主界面"。
+    connect(&SettingsManager::instance(), &SettingsManager::languageChanged,
+            this, [this](const QString&) {
+        if (m_showAction) m_showAction->setText(tr("显示主界面"));
+        if (m_quitAction) m_quitAction->setText(tr("退出"));
+        m_trayIcon->setToolTip(tr("Downloader"));
+    });
 }
 
 SystemTray::~SystemTray()

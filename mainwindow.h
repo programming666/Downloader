@@ -232,12 +232,19 @@ protected:
      * @param event 关闭事件。
      */
     void closeEvent(QCloseEvent *event) override;
-    
+
     /**
      * @brief 重写resizeEvent，响应窗口大小变化以调整表格布局。
      * @param event 窗口大小变化事件。
      */
     void resizeEvent(QResizeEvent *event) override;
+
+    /**
+     * @brief 接 QEvent::LanguageChange：翻译器切换时重新翻译 .ui 中的字符串，
+     * 并调用 refreshCellWidgetTexts() 重建表格 cell widget 的动态文案
+     * （状态列文字、tooltip 等不在 .ui 中的运行时文本）。
+     */
+    void changeEvent(QEvent* event) override;
 
 private:
     Ui::MainWindow *ui;                 ///< 主窗口UI组件
@@ -297,6 +304,19 @@ public:
      * @param total 总字节数（0 表示未知）。
      */
     QString formatSizeCell(qint64 downloaded, qint64 total) const;
+
+    /**
+     * @brief 状态枚举到翻译文案的映射。集中维护避免在多处 switch/case 重复 tr()。
+     * @param status 任务状态。
+     * @return 当前语言的展示文本。
+     */
+    QString formatStatusCell(DownloadTaskStatus status) const;
+
+    /**
+     * @brief 重排表格中所有 cell widget（状态 QLabel、大小/速度/进度等）的当前
+     * 语言版本文案。语言切换、语言变更后调用一次即可。
+     */
+    void refreshCellWidgetTexts();
 
     /**
      * @brief 在任务列表中添加一行。

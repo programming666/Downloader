@@ -4,6 +4,7 @@
 #include <QMenu>
 #include <QDebug>
 #include <QDate>
+#include <QEvent>
 #include "logger.h"
 
 HistoryDialog::HistoryDialog(QWidget *parent) :
@@ -48,6 +49,22 @@ HistoryDialog::HistoryDialog(QWidget *parent) :
 
     setWindowTitle(tr("下载历史记录"));
     resize(800, 600);
+}
+
+void HistoryDialog::changeEvent(QEvent* event)
+{
+    if (event && event->type() == QEvent::LanguageChange) {
+        // 重新翻译 .ui 文案。
+        ui->retranslateUi(this);
+        setWindowTitle(tr("下载历史记录"));
+        // 表头是代码里手动设置的（不在 .ui 里），需要重建。
+        // Qt 的 QTableWidget 没有 sortColumn()，仅记录上次排序号较为复杂；
+        // 这里只重排表头文案，如启用排序，调用方刷新表格后自己再 sortByColumn。
+        ui->tableWidget->setHorizontalHeaderLabels({
+            tr("文件名"), tr("URL"), tr("文件大小"), tr("完成时间"), tr("状态"), tr("线程数")
+        });
+    }
+    QDialog::changeEvent(event);
 }
 
 HistoryDialog::~HistoryDialog()

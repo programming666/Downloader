@@ -63,6 +63,21 @@ public:
     QString loadTheme() const;
 
     /**
+     * @brief 保存用户选择的界面语言。
+     *
+     * 持久化为 "zh_CN" / "en_US" 等 BCP-47 风格 locale 字符串。保存时会通知
+     * 任何监听 languageChanged() 的组件（如活动对话框、托盘）刷新字符串。
+     * @param language 语言代码（"zh_CN" / "en_US" / 等）。
+     */
+    void saveLanguage(const QString& language);
+
+    /**
+     * @brief 读取上次保存的界面语言。
+     * @return 语言代码；如果没有持久化值则返回空串，由调用方决定 fallback。
+     */
+    QString loadLanguage() const;
+
+    /**
      * @brief 保存默认下载路径。
      * @param path 默认下载路径。
      */
@@ -163,6 +178,14 @@ signals:
     void themeChanged(const QString& themeName);
 
     /**
+     * @brief 当语言发生改变时发射此信号。
+     *
+     * 已打开的对话框和动态 cell widget 应连接到该信号以重排字符串。
+     * @param language 新生效的语言代码（"zh_CN" / "en_US" 等）。
+     */
+    void languageChanged(const QString& language);
+
+    /**
      * @brief 当任意持久化设置（代理/线程数/默认路径/监听端口/静默模式等）
      * 通过 save*() 写入后发射此广播信号。
      *
@@ -191,6 +214,12 @@ private:
 
     static const QString GROUP_UI;
     static const QString KEY_THEME;
+
+    /**
+     * @brief 用户选定的界面语言（"zh_CN" / "en_US"），持久化在 GROUP_UI 下；
+     * 缺省返回空，调用方按系统区域决定 fallback。
+     */
+    static const QString KEY_LANGUAGE;
 
     static const QString GROUP_DOWNLOAD;
     static const QString KEY_DEFAULT_PATH;

@@ -21,6 +21,8 @@
 #include <QLocale>
 #include <QTimer> // 用于延迟启动任务
 #include <QProgressDialog>
+#include <QSet>
+#include <QHash>
 #include <utility> // 用于std::as_const
 #include <memory>  // 用于std::unique_ptr
 #include <QFileInfo>
@@ -72,9 +74,27 @@ MainWindow::MainWindow(QWidget *parent)
     // 加载上次保存的主题
     loadStyleSheet(m_settingsManager.loadTheme());
 
-    // 根据系统区域初始化当前语言代码（用于 updateLanguageMenu 判定）
-    QString sysLocale = QLocale::system().name();
-    m_currentLanguage = sysLocale.startsWith("zh") ? "zh_CN" : "en_US";
+    // 解析启动语言：先取持久化值，缺省按系统区域回退到 zh_CN / en_US。
+    // 注意：必须保证 switchLanguage 看到的 m_currentLanguage 已经是要启用的
+    // 语言，否则会让 updateLanguageMenu 误判勾选状态。
+    QString lang = m_settingsManager.loadLanguage();
+    if (lang.isEmpty()) {
+        const QString sysLocale = QLocale::system().name();
+        if (sysLocale.startsWith(QLatin1String("zh"))) {
+            lang = QStringLiteral("zh_CN");
+        } else if (sysLocale.startsWith(QLatin1String("en"))) {
+            lang = QStringLiteral("en_US");
+        } else {
+            lang = QStringLiteral("zh_CN"); // 保底与项目主语言一致
+        }
+    }
+    // 与 switchLanguage 内部归一化规则保持一致
+    if (lang.startsWith(QLatin1String("zh")) && lang != QLatin1String("zh_CN")) {
+        lang = QStringLiteral("zh_CN");
+    } else if (lang.startsWith(QLatin1String("en")) && lang != QLatin1String("en_US")) {
+        lang = QStringLiteral("en_US");
+    }
+    m_currentLanguage = lang;
 
     // 初始化语言菜单
     updateLanguageMenu();
@@ -189,43 +209,50 @@ void MainWindow::initUI()
 
 void MainWindow::loadStyleSheet(const QString& themeName)
 {
+    // 主题白名单：只接受受支持的合法主题名；其它值视为错误并 fallback。
+    static const QSet<QString> kAllowedThemes = {"light", "dark"};
+    const QString effectiveName = kAllowedThemes.contains(themeName) ? themeName : QStringLiteral("light");
+    if (effectiveName != themeName) {
+        qWarning() << "loadStyleSheet: 未知的主题名" << themeName << "，已回退到" << effectiveName;
+    }
+
     QString styleSheet;
     bool loaded = false;
 
     // 首先尝试从资源文件加载
-    QFile file(QString(":/styles/%1.qss").arg(themeName));
+    QFile file(QString(":/styles/%1.qss").arg(effectiveName));
     if (file.open(QFile::ReadOnly | QFile::Text)) {
         styleSheet = file.readAll();
         file.close();
-        qDebug() << "Loaded theme from resources:" << themeName;
+        qDebug() << "Loaded theme from resources:" << effectiveName;
         loaded = true;
     }
 
     // 如果资源文件加载失败，尝试从应用程序目录加载
     if (!loaded) {
         QString appDir = QCoreApplication::applicationDirPath();
-        QFile absoluteFile(appDir + "/styles/" + themeName + ".qss");
+        QFile absoluteFile(appDir + "/styles/" + effectiveName + ".qss");
         if (absoluteFile.open(QFile::ReadOnly | QFile::Text)) {
             styleSheet = absoluteFile.readAll();
             absoluteFile.close();
-            qDebug() << "Loaded theme from application directory:" << themeName;
+            qDebug() << "Loaded theme from application directory:" << effectiveName;
             loaded = true;
         }
     }
 
     // 如果都失败了，尝试从当前工作目录加载
     if (!loaded) {
-        QFile currentDirFile("styles/" + themeName + ".qss");
+        QFile currentDirFile("styles/" + effectiveName + ".qss");
         if (currentDirFile.open(QFile::ReadOnly | QFile::Text)) {
             styleSheet = currentDirFile.readAll();
             currentDirFile.close();
-            qDebug() << "Loaded theme from current directory:" << themeName;
+            qDebug() << "Loaded theme from current directory:" << effectiveName;
             loaded = true;
         }
     }
 
     if (!loaded) {
-        qWarning() << "Failed to load theme:" << themeName;
+        qWarning() << "Failed to load theme:" << effectiveName;
         return;
     }
 
@@ -281,6 +308,54 @@ QString MainWindow::formatSizeCell(qint64 downloaded, qint64 total) const
     return formatBytes(downloaded) + "/" + formatBytes(total);
 }
 
+/**
+ * @brief 状态枚举 → 当前语言文案。集中保留以便 refreshCellWidgetTexts / updateTaskInTable 共用，
+ * 避免 switch/case 散落各处。
+ */
+QString MainWindow::formatStatusCell(DownloadTaskStatus status) const
+{
+    switch (status) {
+    case DownloadTaskStatus::Pending:     return tr("等待中");
+    case DownloadTaskStatus::Downloading: return tr("下载中");
+    case DownloadTaskStatus::Paused:      return tr("已暂停");
+    case DownloadTaskStatus::Cancelled:   return tr("已取消");
+    case DownloadTaskStatus::Completed:   return tr("已完成");
+    case DownloadTaskStatus::Failed:      return tr("失败");
+    }
+    return QString();
+}
+
+/**
+ * @brief 语言切换后重建表格 cell widget 的翻译文案。
+ *
+ * 表格中以 cell widget 形式存在的 QLabel / QProgressBar 不在 Qt 的 .ui 自动
+ * retranslate 流程里，需要手动刷新。流程：
+ *  1) 表头：调用 ui->retranslateUi 不会刷动态 setHorizontalHeaderLabels 的内容
+ *     （这一步 MainWindow::switchLanguage 已经做了，因此这里不重复）；
+ *  2) 遍历每个 row，按 UserRole 找到对应的 DownloadTask，调用一次
+ *     updateTaskInTable 让现有刷新路径走一遍（statusText / tooltip 等会以当前
+ *     tr() 重写）。
+ *
+ * 这样无需把 addTaskToTable 也提一份 refresh 版本，重复利用率高。
+ */
+void MainWindow::refreshCellWidgetTexts()
+{
+    if (!ui || !ui->tableWidget) {
+        return;
+    }
+    QSet<QPointer<DownloadTask>> visited;
+    for (int row = 0; row < ui->tableWidget->rowCount(); ++row) {
+        QTableWidgetItem* item = ui->tableWidget->item(row, 0);
+        if (!item) continue;
+        DownloadTask* task = item->data(Qt::UserRole).value<DownloadTask*>();
+        if (!task) continue;
+        // 同一 task 多行一般不存在；做一次防御性去重。
+        if (visited.contains(QPointer<DownloadTask>(task))) continue;
+        visited.insert(QPointer<DownloadTask>(task));
+        updateTaskInTable(task);
+    }
+}
+
 void MainWindow::addTaskToTable(DownloadTask* task)
 {
     LOGD(QString("开始将任务添加到表格 - 任务:%1").arg(task ? task->fileName() : "空"));
@@ -334,9 +409,10 @@ void MainWindow::addTaskToTable(DownloadTask* task)
 
     // 状态
     LOGD("创建状态标签");
-    QLabel* statusLabel = new QLabel(tr("等待中"), this);
+    const QString pendingText = formatStatusCell(DownloadTaskStatus::Pending);
+    QLabel* statusLabel = new QLabel(pendingText, this);
     statusLabel->setAlignment(Qt::AlignCenter);
-    statusLabel->setToolTip(tr("任务状态: %1").arg(tr("等待中")));
+    statusLabel->setToolTip(tr("任务状态: %1").arg(pendingText));
     ui->tableWidget->setCellWidget(row, 5, statusLabel);
     LOGD("状态标签创建完成");
 
@@ -393,15 +469,7 @@ void MainWindow::updateTaskInTable(DownloadTask* task)
             // 更新状态
             QLabel* statusLabel = qobject_cast<QLabel*>(ui->tableWidget->cellWidget(row, 5));
             if (statusLabel) {
-                QString statusText;
-                switch (task->status()) {
-                case DownloadTaskStatus::Pending: statusText = tr("等待中"); break;
-                case DownloadTaskStatus::Downloading: statusText = tr("下载中"); break;
-                case DownloadTaskStatus::Paused: statusText = tr("已暂停"); break;
-                case DownloadTaskStatus::Cancelled: statusText = tr("已取消"); break;
-                case DownloadTaskStatus::Completed: statusText = tr("已完成"); break;
-                case DownloadTaskStatus::Failed: statusText = tr("失败"); break;
-                }
+                const QString statusText = formatStatusCell(task->status());
                 statusLabel->setText(statusText);
                 statusLabel->setToolTip(tr("任务状态: %1").arg(statusText));
             }
@@ -1090,6 +1158,19 @@ void MainWindow::on_actionEnglish_triggered()
 
 void MainWindow::switchLanguage(const QString& language)
 {
+    // 统一 trim+大小写：避免传入 " zh_cn " 之类绕过流程
+    QString lang = language.trimmed();
+    if (lang.isEmpty()) {
+        qWarning() << "switchLanguage: 空语言代码";
+        return;
+    }
+    // 语言族回退（zh_TW/zh_HK → zh_CN；其余按原样）
+    if (lang.startsWith(QLatin1String("zh")) && lang != QLatin1String("zh_CN")) {
+        lang = QStringLiteral("zh_CN");
+    } else if (lang.startsWith(QLatin1String("en")) && lang != QLatin1String("en_US")) {
+        lang = QStringLiteral("en_US");
+    }
+
     // 尝试加载新翻译，失败时不要破坏当前已安装的翻译器
     // QTranslator 禁用了拷贝/移动赋值，所以用 unique_ptr 管理新翻译器，
     // 加载成功后转移所有权到 m_translator 指针。
@@ -1106,24 +1187,19 @@ void MainWindow::switchLanguage(const QString& language)
         return false;
     };
 
-    if (language == "zh_CN") {
-        loaded = tryLoad(":/translations/zh_CN.qm");
-        if (!loaded) {
-            QString appDir = QCoreApplication::applicationDirPath();
-            loaded = tryLoad(appDir + "/translations/zh_CN.qm");
-        }
-        if (!loaded) {
-            loaded = tryLoad("translations/zh_CN.qm");
-        }
-    } else if (language == "en_US") {
-        loaded = tryLoad(":/translations/en_US.qm");
-        if (!loaded) {
-            QString appDir = QCoreApplication::applicationDirPath();
-            loaded = tryLoad(appDir + "/translations/en_US.qm");
-        }
-        if (!loaded) {
-            loaded = tryLoad("translations/en_US.qm");
-        }
+    // 优先级：资源（/i18n/）→ 应用目录 translations/<lang>.qm → 工作目录
+    // 注意：qt_add_translations 把 .qm 输出到 :/i18n/<lang>.qm（Qt 默认），不是
+    // :/translations/<lang>.qm；之前 mainwindow.cpp 走资源路径时拼错前缀，
+    // 现在改对。
+    const QStringList candidatePaths = {
+        QStringLiteral(":/i18n/%1.qm").arg(lang),
+        QDir(QCoreApplication::applicationDirPath()).filePath(
+            QStringLiteral("translations/%1.qm").arg(lang)),
+        QStringLiteral("translations/%1.qm").arg(lang)
+    };
+
+    for (const QString& path : candidatePaths) {
+        if (tryLoad(path)) break;
     }
 
     if (loaded) {
@@ -1135,29 +1211,52 @@ void MainWindow::switchLanguage(const QString& language)
         }
         m_translator = newTranslator.release();
         qApp->installTranslator(m_translator);
-        m_currentLanguage = language;
-        qDebug() << "Switched to" << language << "from" << loadedFrom;
+        m_currentLanguage = lang;
+        qDebug() << "Switched to" << lang << "from" << loadedFrom;
     } else {
-        qWarning() << "Failed to load translation for" << language;
+        qWarning() << "Failed to load translation for" << lang
+                   << "（已尝试 " << candidatePaths << "）";
     }
 
     // 重新翻译UI
     ui->retranslateUi(this);
 
-    // 重新设置表头标签
+    // 重新设置表头标签（动态设置，不在 .ui 里的）
     ui->tableWidget->setHorizontalHeaderLabels({
         tr("文件名"), tr("URL"), tr("进度"), tr("大小"), tr("速度"), tr("状态"), tr("操作")
     });
 
+    // 表格 cell widget 的动态文案（状态、tooltip 等）需要重排。
+    refreshCellWidgetTexts();
+
     // 更新语言菜单状态
     updateLanguageMenu();
 
-    // 显示切换成功消息
-    if (language == "zh_CN") {
+    // 持久化语言选择，并通知所有监听方（SettingsDialog / SystemTray）刷新
+    SettingsManager::instance().saveLanguage(lang);
+
+    // 显示切换成功消息（让新翻译生效后再 showMessage，避免看到旧文案）
+    if (lang == "zh_CN") {
         ui->statusbar->showMessage(tr("已切换到中文界面"));
-    } else if (language == "en_US") {
+    } else if (lang == "en_US") {
         ui->statusbar->showMessage(tr("Switched to English interface"));
     }
+}
+
+void MainWindow::changeEvent(QEvent* event)
+{
+    if (event && event->type() == QEvent::LanguageChange) {
+        // 这是 Qt 派发过来的翻译器变更通知。Window 本身的 .ui 已经被 ui_X 自动
+        // retranslate（由 ui->retranslateUi(this) 流程包揽），但本类还有动态
+        // 设置的字符串（表头、cell widget），需要主动重排。
+        ui->retranslateUi(this);
+        ui->tableWidget->setHorizontalHeaderLabels({
+            tr("文件名"), tr("URL"), tr("进度"), tr("大小"), tr("速度"), tr("状态"), tr("操作")
+        });
+        refreshCellWidgetTexts();
+        updateLanguageMenu();
+    }
+    QMainWindow::changeEvent(event);
 }
 
 /**

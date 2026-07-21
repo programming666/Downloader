@@ -8,6 +8,7 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QFileInfo>
+#include <QEvent>
 
 /**
  * @brief 新建下载任务对话框构造函数
@@ -42,6 +43,17 @@ NewTaskDialog::NewTaskDialog(QWidget *parent)
 NewTaskDialog::~NewTaskDialog()
 {
     delete ui;
+}
+
+void NewTaskDialog::changeEvent(QEvent* event)
+{
+    if (event && event->type() == QEvent::LanguageChange) {
+        // 应用翻译器变更：重写 .ui 中的字符串；再把动态文案（windowTitle）
+        // 单独 setText 一次以保证覆盖。
+        ui->retranslateUi(this);
+        setWindowTitle(tr("新建下载任务"));
+    }
+    QDialog::changeEvent(event);
 }
 
 QString NewTaskDialog::url() const

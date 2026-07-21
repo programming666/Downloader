@@ -52,9 +52,18 @@ private slots:
     void on_registerProtocolButton_clicked();
 
     /**
-     * @brief 处理“取消注册”按钮点击事件，清空 downloader:// 协议。
+     * @brief 处理”取消注册”按钮点击事件，清空 downloader:// 协议。
      */
     void on_unregisterProtocolButton_clicked();
+
+protected:
+    /**
+     * @brief 接 QEvent::LanguageChange：当前应用翻译器变化时 Qt 会派发该事件；
+     * 调用 ui->retranslateUi(this)，并重新填充代理类型 / 主题 / 语言下拉框的
+     * 用户可见条目文案（因为这些条目是在构造里直接 tr() 写入的，retranslateUi
+     * 不会主动重写条目）。
+     */
+    void changeEvent(QEvent* event) override;
 
 private:
     Ui::SettingsDialog *ui; ///< UI界面指针。

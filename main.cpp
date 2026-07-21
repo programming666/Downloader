@@ -18,6 +18,7 @@
 #include <QDateTime>
 #include <QTimer>
 #include <QByteArray>
+#include <QDir>
 
 namespace {
 
@@ -134,17 +135,11 @@ int main(int argc, char *argv[])
     ScheduleManager::instance();
     DownloadManager::instance();
 
-    // 翻译探测（同原行为）
-    {
-        QTranslator probeTranslator;
-        bool loaded = probeTranslator.load(QString(":/i18n/%1.qm").arg(QLocale::system().name()));
-        if (!loaded) {
-            qWarning() << "Translation file for locale"
-                       << QLocale::system().name()
-                       << "not found; UI will fall back to source language.";
-        }
-    }
-    LOGD(QString("System locale: %1").arg(QLocale::system().name()));
+    // 启动期翻译：由 MainWindow 的构造函数负责读取持久化语言、构造时调用
+    // switchLanguage 来安装翻译器（同时也是单一 m_translator 指针的所有者，
+    // 析构时统一释放）。main.cpp 这里只保留一条 LOGD 用于排查。
+    LOGD(QString("System locale: %1 (MainWindow will resolve startup language)")
+             .arg(QLocale::system().name()));
 
     // 创建并显示主窗口
     MainWindow w;

@@ -7,6 +7,7 @@
 #include <QMessageBox>
 #include <QDir>
 #include <QUrl>
+#include <QEvent>
 
 namespace {
 
@@ -127,6 +128,10 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     ui->themeComboBox->addItem(tr("浅色模式"), "light");
     ui->themeComboBox->addItem(tr("深色模式"), "dark");
 
+    // 初始化语言选择；userData 存 BCP-47 locale 字符串，调用方用它做切换。
+    ui->languageComboBox->addItem(QStringLiteral("简体中文"), QStringLiteral("zh_CN"));
+    ui->languageComboBox->addItem(QStringLiteral("English (US)"), QStringLiteral("en_US"));
+
     loadSettingsToUi();
 
     // Qt的自动连接机制会自动连接符合命名规则的槽函数
@@ -206,6 +211,53 @@ void SettingsDialog::loadSettingsToUi()
     if (themeIndex != -1) {
         ui->themeComboBox->setCurrentIndex(themeIndex);
     }
+
+    // 加载语言（缺省回退到 m_currentLanguage 思路：先看持久化值，再看系统。
+    // 设置对话框不强制在未持久化时回退到系统，而是按本类成员 m_fallbackLanguage
+    // （默认 zh_CN）兜底；实际切语言时由 MainWindow 决定。）
+    QString currentLang = SettingsManager::instance().loadLanguage();
+    if (currentLang.isEmpty()) {
+        currentLang = QStringLiteral("zh_CN");
+    }
+    int langIndex = ui->languageComboBox->findData(currentLang);
+    if (langIndex != -1) {
+        ui->languageComboBox->setCurrentIndex(langIndex);
+    }
+}
+
+/**
+ * @brief 接 QEvent::LanguageChange，让窗口所有静态字符串跟随翻译器变化。
+ *
+ * 重写规则：
+ *  1. ui->retranslateUi(this) 重排 .ui 中的所有静态字符串。
+ *  2. comboBox 中的条目是 C++ 里手动 addItem() 的，retranslateUi 不会动它们，
+ *     所以再单独重写"浅色模式/深色模式/简体中文/English (US)"这几条文案。
+ *  3. protocolStatusLabel 的文本依赖当前注册状态，且在 validateSettingsDialogUi
+ *     不被调用期间也需要重新翻译；这里主动刷新一遍。
+ */
+void SettingsDialog::changeEvent(QEvent* event)
+{
+    if (event && event->type() == QEvent::LanguageChange) {
+        ui->retranslateUi(this);
+        // 主题下拉框（条目是构造时 tr() 进去的）
+        if (ui->themeComboBox->count() >= 2) {
+            const int idx = ui->themeComboBox->currentIndex();
+            ui->themeComboBox->setItemText(0, tr("浅色模式"));
+            ui->themeComboBox->setItemText(1, tr("深色模式"));
+            ui->themeComboBox->setCurrentIndex(idx);
+        }
+        // 语言下拉框
+        if (ui->languageComboBox->count() >= 2) {
+            const int idx = ui->languageComboBox->currentIndex();
+            ui->languageComboBox->setItemText(0, tr("简体中文"));
+            ui->languageComboBox->setItemText(1, tr("English (US)"));
+            ui->languageComboBox->setCurrentIndex(idx);
+        }
+        setWindowTitle(tr("设置"));
+        // 注册状态标签依赖注册表当前状态，需要重新刷新（不然内部 tr() 仍是旧语言）
+        refreshProtocolStatusUi();
+    }
+    QDialog::changeEvent(event);
 }
 
 void SettingsDialog::saveSettingsFromUi()
@@ -247,6 +299,9 @@ void SettingsDialog::saveSettingsFromUi()
 
     // 保存主题
     SettingsManager::instance().saveTheme(ui->themeComboBox->currentData().toString());
+
+    // 保存语言（只有 OK/Apply 提交时才持久化；用户临时切换 comboBox 不立刻落盘）
+    SettingsManager::instance().saveLanguage(ui->languageComboBox->currentData().toString());
 
     QMessageBox::information(this, tr("设置已保存"), tr("应用程序设置已成功保存。"));
 }

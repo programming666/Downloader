@@ -13,6 +13,7 @@ const QString SettingsManager::KEY_PROXY_PASS = "ProxyPass";
 
 const QString SettingsManager::GROUP_UI = "UI";
 const QString SettingsManager::KEY_THEME = "Theme";
+const QString SettingsManager::KEY_LANGUAGE = "Language";
 
 const QString SettingsManager::GROUP_DOWNLOAD = "Download";
 const QString SettingsManager::KEY_DEFAULT_PATH = "DefaultDownloadPath";
@@ -148,6 +149,24 @@ QString SettingsManager::loadTheme() const
     QString theme = m_settings->value(KEY_THEME, "light").toString(); // 默认浅色主题
     m_settings->endGroup();
     return theme;
+}
+
+void SettingsManager::saveLanguage(const QString& language)
+{
+    m_settings->beginGroup(GROUP_UI);
+    m_settings->setValue(KEY_LANGUAGE, language);
+    m_settings->endGroup();
+    m_settings->sync();
+    emit languageChanged(language);
+    emit settingsChanged();
+}
+
+QString SettingsManager::loadLanguage() const
+{
+    m_settings->beginGroup(GROUP_UI);
+    const QString lang = m_settings->value(KEY_LANGUAGE).toString();
+    m_settings->endGroup();
+    return lang;
 }
 
 void SettingsManager::saveDefaultDownloadPath(const QString& path)

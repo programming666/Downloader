@@ -106,6 +106,13 @@ private slots:
      */
     void accept() override;
 
+protected:
+    /**
+     * @brief 接 QEvent::LanguageChange：当前应用翻译器变化时 Qt 会派发该事件；
+     * 在这里调用 ui->retranslateUi(this) 让对话框文案跟随语言切换更新。
+     */
+    void changeEvent(QEvent* event) override;
+
 private:
     Ui::ScheduleDialog *ui; ///< UI指针
 
